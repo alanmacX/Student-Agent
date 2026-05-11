@@ -1,26 +1,33 @@
 # macOS
 .DS_Store
 
-# Xcode
+# Xcode & Build Artifacts
 DerivedData/
 build/
 Release/
+.derivedData/
+.build_output/
+.claude/
+.build/
 *.xcuserstate
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 
-# Swift Package Manager
-.swiftpm/
-.build/
-
-# Logs / temp
+# Logs & Debug
 *.log
 build_error*
 build_log*
 build_verify.txt
 
-# Secrets / tokens
+# Personal Data & Backups
+course_schedule.csv
+*.bak
+*.original
+test.swift
+ChatBubble.swift
+
+# Secrets
 .env
 *.env
 *token*
