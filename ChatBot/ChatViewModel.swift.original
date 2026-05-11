@@ -1,0 +1,152 @@
+import Foundation
+import SwiftUI
+import AppKit
+import EventKit
+import PDFKit
+import Combine
+
+@MainActor
+final class ChatViewModel: ObservableObject {
+
+    static let defaultChatPersonaPrompt = """
+    你是一个温暖、聪明、直接的中文聊天助手。优先给出可执行建议；不确定时说明边界；回答自然、简洁。除非用户明确要求格式化文档、代码、表格或清单，否则不要使用 Markdown 标题、表格和长列表。
+    """
+
+    static let defaultScheduleAgentPrompt = """
+    优先把日程、提醒事项、课程表、学习通作业和学习通重要消息交给 App 的结构化 UI 展示。最终回复只写一句中文摘要。创建课程或日程前确认日期、时间、时区和目标日历；修改、完成、删除必须等待 App 内确认。
+    """
+
+    // MARK: - State
+    @Published var conversations: [Conversation] = []
+    @Published var selectedConversationID: UUID?
+    @Published var isStreaming = false
+    @Published var chatStreamingConversationID: UUID?
+    @Published var activeToolStatus: String = ""
+    @Published var isChatThinking: Bool = false
+    @Published var errorMessage: String?
+    @Published var scheduleMessages: [Message] = []
+    @Published var isScheduleAgentRunning = false
+    @Published var scheduleErrorMessage: String?
+    @Published var hasRemindersAccess = false
+    @Published var hasCalendarAccess = false
+    @Published var pendingScheduleConfirmation: SchedulePendingConfirmation?
+    @Published var scheduleSidebar = ScheduleSidebarSnapshot()
+    @Published var todayWidget = TodayWidgetSnapshot()
+    @Published var isTodayWidgetSummaryRunning = false
+    @Published var isScheduleSidebarLoading = false
+    @Published var scheduleSidebarLastUpdated: Date?
+    @Published var courseSchedule: [ScheduleCalendarEventItem] = []
+    @Published var quickCaptures: [QuickCaptureItem] = []
+    @Published var shoppingListItems: [ShoppingListItem] = []
+    @Published var importantScheduleItemIDs: Set<String> = []
+    @Published var chaoxingMessageInsights: [ScheduleChaoxingMessageInsightItem] = []
+    @Published var isChaoxingMessageExtractionRunning = false
+    @Published var chaoxingRuntimeSyncStatus = ChaoxingRuntimeSyncStatus()
+    @Published var companionState = CompanionState()
+    @Published var companionPreferences = CompanionPreferences()
+    @Published var companionClipboardOffer: CompanionClipboardOffer?
+    @Published var chatAgentMode: ChatAgentMode = .normal
+    @Published var chatAgentVisualization: ChatAgentVisualization?
+    @Published var pendingChatToolConfirmation: ChatToolConfirmation?
+    @Published var floatingChatConversationIDs: Set<UUID> = []
+    @Published var scheduleContextResetAt: Date? = nil
+
+    let remindersService = RemindersService()
+    let legacyCourseImportMarker = "[ChatBotCourse]"
+    let chaoxingMemoryStore = ChaoxingMemoryStore()
+    var processedChaoxingMessageIDs: Set<String> = []
+    var chaoxingMessageExtractionTask: Task<Void, Never>?
+    var chatTask: Task<Void, Never>?
+    var chatTaskID: UUID?
+    var scheduleTask: Task<Void, Never>?
+    var scheduleTaskID: UUID?
+    var todayWidgetSummaryTask: Task<Void, Never>?
+    var chaoxingRuntimeSyncTask: Task<Void, Never>?
+    var companionFeedbackTask: Task<Void, Never>?
+    var companionClipboardDismissTask: Task<Void, Never>?
+    var chaoxingProbeSignatures: [String: String] = [:]
+    var scheduleRefreshSequence = 0
+
+    let harness = ScheduleHarness()
+    lazy var scheduleOrchestrator = ScheduleOrchestrator(harness: harness)
+
+    var cachedAgentReminders: [EKReminder] = []
+    var cachedAgentEvents: [EKEvent] = []
+
+    // MARK: - Providers
+    @Published var customProviders: [Provider] = []
+    @Published var providerModelOverrides: [String: [String]] = [:]
+    var allProviders: [Provider] { Provider.builtins + customProviders }
+    @Published var scheduleAgentProviderID: String?
+
+    // MARK: - API Keys & Settings
+    @Published var openAIKey = ""
+    @Published var anthropicKey = ""
+    @Published var geminiKey = ""
+    @Published var mimoKey = ""
+    @Published var chatPersonaPrompt = ChatViewModel.defaultChatPersonaPrompt
+    @Published var scheduleAgentPrompt = ChatViewModel.defaultScheduleAgentPrompt
+    @Published var promptsLocked = true
+    @Published var chatSkills: [ChatSkill] = []
+    @Published var deepThinkingEnabled = false
+    @Published var showReasoningSummary = false
+    @Published var webAccessEnabled = true
+    @Published var scheduleModeEnabled = false
+    @Published var pdfToolEnabled = false
+    @Published var appleNotesToolEnabled = false
+    @Published var shoppingListToolEnabled = false
+    @Published var multiAgentEnabled = false
+    @Published var isRoleplayMode = false
+    @Published var agentThinkingBudgetTokens: Int = 0
+    @Published var quickCaptureOpenScheduleAfterSave = true
+    @Published var quickCaptureIncludeSourceMetadata = true
+    @Published var quickCaptureKeepAfterSend = false
+
+    @Published var chaoxingMutedConversationNames: Set<String> = []
+
+    var scheduleConfirmationContinuation: CheckedContinuation<Bool, Never>?
+    var chatToolConfirmationContinuation: CheckedContinuation<Bool, Never>?
+
+    let maxSkillScriptBytes = 256_000
+    let maxWebFetchBytes = 220_000
+
+    // MARK: - Computed
+    var selectedConversation: Conversation? {
+        conversations.first { $0.id == selectedConversationID }
+    }
+    var selectedIndex: Int? {
+        conversations.firstIndex { $0.id == selectedConversationID }
+    }
+    var activeProvider: Provider {
+        if let selectedConversation {
+            return provider(for: selectedConversation.providerID)
+        }
+        return allProviders.first(where: isProviderUsable) ?? .openAI
+    }
+    static let automaticScheduleAgentProviderID = "__automatic_schedule_agent_provider__"
+
+    var automaticAgentProvider: Provider {
+        if isProviderUsable(activeProvider) { return activeProvider }
+        return allProviders.first(where: isProviderUsable) ?? activeProvider
+    }
+    var activeAgentProvider: Provider {
+        if let scheduleAgentProvider {
+            return scheduleAgentProvider
+        }
+        return automaticAgentProvider
+    }
+    var scheduleAgentProvider: Provider? {
+        guard let scheduleAgentProviderID else { return nil }
+        return allProviders.first { $0.id == scheduleAgentProviderID }
+    }
+    var scheduleAgentProviderSelectionID: String {
+        scheduleAgentProviderID ?? Self.automaticScheduleAgentProviderID
+    }
+    var balanceCheckProviders: [Provider] {
+        allProviders.filter { $0.supportsBalanceCheck && !apiKey(for: $0).isEmpty }
+    }
+
+    init() {
+        bootstrap()
+    }
+}
