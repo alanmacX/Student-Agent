@@ -125,12 +125,16 @@ def decrypt_db_to_tmp(
         output_path: str = DECRYPTED_DB_PATH,
 ) -> str:
     """Decrypt the DingTalk SQLite DB and apply WAL frames into a temp DB path."""
+    if not source_path:
+        raise FileNotFoundError("DingTalk DB not found: no *_v3/DBFiles/dingtalk.db discovered")
     wal_path = wal_path if wal_path is not None else source_path + "-wal"
     source = Path(source_path)
     output = Path(output_path)
 
     if not source.exists():
         raise FileNotFoundError(f"DingTalk DB not found: {source}")
+    if not source.is_file():
+        raise FileNotFoundError(f"DingTalk DB path is not a file: {source}")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp_output = output.with_name(f"{output.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
