@@ -265,6 +265,17 @@ _SCHEMA = """
         output_tokens INTEGER,
         duration_ms   INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS user_memory (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        category   TEXT NOT NULL DEFAULT 'preference',
+        key        TEXT NOT NULL,
+        value      TEXT NOT NULL,
+        source     TEXT NOT NULL DEFAULT 'user_told',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(key)
+    );
 """
 
 # ---------------------------------------------------------------------------

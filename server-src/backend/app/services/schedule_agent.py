@@ -196,10 +196,25 @@ async def build_turn_context(db_path, chaoxing_svc, now, window_hours=48) -> str
             LIMIT 8
         """, (now.isoformat(),))).fetchall()
 
+    # User memory (preferences, habits)
+    user_mem_rows = []
+    try:
+        async with aiosqlite.connect(db_path) as _db:
+            _db.row_factory = aiosqlite.Row
+            user_mem_rows = await (await _db.execute(
+                "SELECT key, value, category FROM user_memory ORDER BY updated_at DESC LIMIT 20"
+            )).fetchall()
+    except Exception:
+        pass
+
     lines = [
         "Turn context snapshot. 如需精确完整数据，请调用工具。",
         f"Chaoxing logged in: {bool(getattr(chaoxing_svc, 'is_logged_in', False))}",
     ]
+    if user_mem_rows:
+        lines.append("【用户记忆】" + "；".join(
+            f"{r['key']}: {r['value']} ({r['category']})" for r in user_mem_rows
+        ))
     if rows["reminders"]:
         lines.append("未来 48 小时提醒：" + "；".join(
             f"{r['id']} {r['title']} {r['due_at']} important={bool(r['is_important'])}" for r in rows["reminders"]
@@ -325,6 +340,9 @@ def _filter_schedule_tools(tools: list, user_message: str) -> list:
         "send_push_notification":      ["推送", "通知", "发送通知", "立刻通知", "马上提醒", "提醒我", "截止", "deadline"],
         "get_memory_insights":         ["学习通", "记忆", "memory", "洞察", "分析"],
         "get_system_status":           ["系统", "状态", "运行", "standby", "登录", "cpu", "内存", "ram", "磁盘", "disk", "健康", "health", "运行时间", "uptime", "钉钉状态"],
+        "save_memory":                 ["记住", "记忆", "偏好", "习惯", "remember", "我喜欢", "我习惯", "我一般"],
+        "delete_memory":               ["忘记", "删除记忆", "删除偏好", "forget"],
+        "list_memories":               ["我的记忆", "我的偏好", "记忆列表", "所有记忆"],
         "trigger_memory_scan":         ["扫描", "立刻检查", "帮我扫", "触发扫描", "检查学习通"],
         "set_push_config":             ["静默", "免打扰", "推送设置", "推送配置", "间隔", "quiet"],
     }
@@ -675,6 +693,37 @@ def _build_schedule_tools() -> list:
         ToolDefinition(
             name="get_system_status",
             description="查看系统运行状态：CPU、内存、磁盘使用率，钉钉连接状态，学习通登录状态，standby agent 最近决策，待发通知数，内存条目数，系统运行时间。",
+            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        ToolDefinition(
+            name="save_memory",
+            description="保存用户偏好、习惯或上下文信息到长期记忆。当用户说'记住XXX'、'我喜欢XXX'、'我习惯XXX'时调用。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "记忆键名，如 wake_up_time、preferred_remind_advance"},
+                    "value": {"type": "string", "description": "记忆值"},
+                    "category": {"type": "string", "enum": ["preference", "habit", "context"], "description": "分类：偏好/习惯/上下文"},
+                },
+                "required": ["key", "value"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
+            name="delete_memory",
+            description="删除一条用户记忆。当用户说'忘记XXX'、'删除偏好'时调用。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "要删除的记忆键名"},
+                },
+                "required": ["key"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
+            name="list_memories",
+            description="列出所有用户记忆（偏好、习惯等）。",
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         ),
         ToolDefinition(
@@ -1047,6 +1096,37 @@ async def _execute_schedule_tool(
         if interval:
             parts.append(f"standby 间隔改为 {interval} 分钟")
         return json.dumps({"ok": True, "message": "；".join(parts) or "配置已更新。"})
+    elif tc.name == "save_memory":
+        key = tc.arguments.get("key", "").strip()
+        value = tc.arguments.get("value", "").strip()
+        category = tc.arguments.get("category", "preference")
+        if not key or not value:
+            return "错误: key 和 value 不能为空"
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                "INSERT INTO user_memory (category, key, value, source, updated_at) VALUES (?, ?, ?, 'user_told', datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, category=excluded.category, source='user_told', updated_at=datetime('now')",
+                (category, key, value),
+            )
+            await db.commit()
+        return json.dumps({"ok": True, "message": f"已记住：{key} = {value}"}, ensure_ascii=False)
+    elif tc.name == "delete_memory":
+        key = tc.arguments.get("key", "").strip()
+        if not key:
+            return "错误: key 不能为空"
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("DELETE FROM user_memory WHERE key = ?", (key,))
+            await db.commit()
+            if cursor.rowcount == 0:
+                return json.dumps({"ok": False, "message": f"未找到记忆：{key}"}, ensure_ascii=False)
+        return json.dumps({"ok": True, "message": f"已删除记忆：{key}"}, ensure_ascii=False)
+    elif tc.name == "list_memories":
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (await db.execute("SELECT key, value, category, source, updated_at FROM user_memory ORDER BY updated_at DESC")).fetchall()
+        if not rows:
+            return "暂无用户记忆。"
+        entries = [dict(r) for r in rows]
+        return json.dumps({"ok": True, "memories": entries}, ensure_ascii=False)
     elif tc.name == "send_push_notification":
         from .push_service import send_push_to_all_subscribers
         import uuid as _uuid

@@ -3,6 +3,7 @@ import { PanelRight, Trash2, X, Upload, Plus, MessageSquare } from "lucide-react
 import { useSSEStream } from "../../hooks/useSSEStream";
 import { useScheduleSessions } from "../../hooks/useScheduleSessions";
 import { apiFetch } from "../../api/client";
+import { createReminder } from "../../api/reminders";
 import MessageBubble from "../chat/MessageBubble";
 import ChatInput from "../chat/ChatInput";
 import ScheduleSidebar from "./ScheduleSidebar";
@@ -389,6 +390,44 @@ export default function ScheduleView() {
     startStream("/api/schedule/chat", { message: msgToSend, session_id: sessionId });
   }, [input, isStreaming, activeSession, startStream, createSession]);
 
+  const handleCommand = useCallback(async (cmdName, args) => {
+    if (cmdName === "/remind") {
+      if (!args.trim()) {
+        setMessages((prev) => [...prev, { role: "system", content: "用法: /remind 提醒内容" }]);
+        return;
+      }
+      try {
+        await createReminder({ title: args.trim() });
+        setMessages((prev) => [...prev, { role: "system", content: `已创建提醒: ${args.trim()}` }]);
+      } catch (e) {
+        setMessages((prev) => [...prev, { role: "system", content: `创建失败: ${e.message}` }]);
+      }
+    } else if (cmdName === "/note") {
+      if (!args.trim()) {
+        setMessages((prev) => [...prev, { role: "system", content: "用法: /note 笔记内容" }]);
+        return;
+      }
+      try {
+        const notes = JSON.parse(localStorage.getItem("hub_quick_notes") || "[]");
+        notes.unshift({ id: Date.now(), text: args.trim(), created: new Date().toISOString() });
+        localStorage.setItem("hub_quick_notes", JSON.stringify(notes));
+        setMessages((prev) => [...prev, { role: "system", content: `已保存笔记: ${args.trim()}` }]);
+      } catch {
+        setMessages((prev) => [...prev, { role: "system", content: "保存失败" }]);
+      }
+    } else if (cmdName === "/status") {
+      // Send as normal agent message
+      setInput("检查服务器状态");
+      setTimeout(() => handleSend(), 50);
+    } else if (cmdName === "/clear") {
+      setMessages([]);
+      createSession("新对话").then((s) => { if (s) setActiveSession(s); });
+    } else {
+      // Unknown command — send as normal message
+      setInput(cmdName + (args ? " " + args : ""));
+    }
+  }, [handleSend, createSession, setActiveSession]);
+
   const handleConfirm = useCallback(async () => {
     if (isStreaming) return;
     pendingConfirmRef.current = null;
@@ -545,6 +584,7 @@ export default function ScheduleView() {
           onChange={setInput}
           onSend={handleSend}
           onStop={stopStream}
+          onCommand={handleCommand}
           isStreaming={isStreaming}
           placeholder="问问日程、作业或学习通消息..."
         />

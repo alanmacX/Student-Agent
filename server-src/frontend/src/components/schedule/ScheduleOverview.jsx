@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, Sparkles, BookOpen, CalendarClock, ChevronDown, MapPin } from "lucide-react";
 import { fetchScheduleSidebar, refreshBriefing } from "../../api/schedule";
+import StatusStrip from "./StatusStrip";
+import TokenSummary from "./TokenSummary";
 
 const WEEKDAYS = [
   { label: "周一", value: 1 },
@@ -140,6 +142,8 @@ export default function ScheduleOverview() {
           onRefreshBriefing={handleRefreshBriefing}
           refreshingBriefing={refreshingBriefing}
         />
+        <StatusStrip />
+        <TokenSummary />
 
         <ScheduleSection courses={courses} events={data?.week_events || data?.events || []} />
       </div>

@@ -116,6 +116,12 @@ async def token_analytics(days: int = Query(7, ge=1, le=90)):
             "total": total,
         })
 
+    # Extract today and yesterday for quick summary
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    today_data = next((d for d in result_daily if d["date"] == today_str), None)
+    yesterday_data = next((d for d in result_daily if d["date"] == yesterday_str), None)
+
     return {
         "days": days,
         "daily": result_daily,
@@ -124,4 +130,6 @@ async def token_analytics(days: int = Query(7, ge=1, le=90)):
             "output_tokens": int(total_output),
             "cost_usd": round(total_cost, 6),
         },
+        "today": today_data["total"] if today_data else {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+        "yesterday": yesterday_data["total"] if yesterday_data else {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
     }

@@ -32,7 +32,7 @@ from app.services.push_service import send_push_to_all_subscribers, has_notified
 # ── Tool definitions ──────────────────────────────────────────────────────────
 
 async def _compute_context_hash(db_path: str) -> str:
-    """Hash of the 3 tables that affect standby decisions. Cheap DB read."""
+    """Hash of the 3 tables + system metrics that affect standby decisions."""
     async with aiosqlite.connect(db_path) as db:
         r1 = await (await db.execute(
             "SELECT MAX(updated_at) FROM server_reminders WHERE is_completed=0"
@@ -43,7 +43,13 @@ async def _compute_context_hash(db_path: str) -> str:
         r3 = await (await db.execute(
             "SELECT MAX(sent_at) FROM notification_log"
         )).fetchone()
-    raw = f"{r1[0]}|{r2[0]}|{r3[0]}"
+    # Include system metrics in hash so health changes trigger evaluation
+    try:
+        import psutil
+        health_sig = f"{int(psutil.cpu_percent(interval=0))}:{int(psutil.virtual_memory().percent)}:{int(psutil.disk_usage('/').percent)}"
+    except Exception:
+        health_sig = "na"
+    raw = f"{r1[0]}|{r2[0]}|{r3[0]}|{health_sig}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 STANDBY_TOOLS = [
@@ -102,8 +108,9 @@ def _build_system_prompt(now: datetime) -> str:
 1. 作业/任务截止时间在 3 小时内 → 推送（高优先级）
 2. 截止时间在 24 小时内且尚未推送过 → 推送（普通优先级）
 3. 有未处理的高重要度学习通消息（action_hint 非空）→ 考虑推送
-4. 以上都没有 → 调用 no_action
-5. 已经推送过的条目（已在通知记录中）→ no_action，不要重复打扰
+4. 系统指标异常（CPU>90%、RAM>85%、磁盘>90%）且最近 30 分钟内未告警 → 推送（高优先级），item_id 用 health_alert_{metric}_{时间}
+5. 以上都没有 → 调用 no_action
+6. 已经推送过的条目（已在通知记录中）→ no_action，不要重复打扰
 
 你只能发送一条通知，选最重要的一件事。绝对不要发送多条。
 不要向用户解释你在做什么——直接调用工具。""".strip()
@@ -155,7 +162,30 @@ async def _build_context(db_path: str, now: datetime) -> str:
             LIMIT 5
         """)).fetchall()
 
-    if not reminder_rows and not memory_rows and not undelivered_rows:
+    # System health metrics
+    health_info = {}
+    try:
+        import psutil as _psutil
+        health_info = {
+            "cpu": round(_psutil.cpu_percent(interval=0.3)),
+            "ram": round(_psutil.virtual_memory().percent),
+            "disk": round(_psutil.disk_usage("/").percent),
+        }
+    except Exception:
+        pass
+
+    # User memory (notification preferences)
+    user_mem_rows = []
+    try:
+        async with aiosqlite.connect(db_path) as _db2:
+            _db2.row_factory = aiosqlite.Row
+            user_mem_rows = await (await _db2.execute(
+                "SELECT key, value FROM user_memory ORDER BY updated_at DESC LIMIT 10"
+            )).fetchall()
+    except Exception:
+        pass
+
+    if not reminder_rows and not memory_rows and not undelivered_rows and not health_info:
         return "当前没有待办事项或重要消息。"
 
     if reminder_rows:
@@ -178,6 +208,16 @@ async def _build_context(db_path: str, now: datetime) -> str:
         for r in undelivered_rows:
             r = dict(r)
             lines.append(f"  - {r['notif_type']} {r['item_id']} sent_at={r['sent_at']}")
+
+    if health_info:
+        lines.append("【系统健康】")
+        lines.append(f"  CPU {health_info['cpu']}% | RAM {health_info['ram']}% | 磁盘 {health_info['disk']}%")
+
+    if user_mem_rows:
+        lines.append("【用户偏好】")
+        for r in user_mem_rows:
+            r = dict(r)
+            lines.append(f"  - {r['key']}: {r['value']}")
 
     return "\n".join(lines)
 

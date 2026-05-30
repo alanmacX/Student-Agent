@@ -41,6 +41,35 @@ async def health():
     return {"status": "ok", "chaoxing_logged_in": app.state.chaoxing_svc.is_logged_in}
 
 
+@app.get("/api/health/detail")
+async def health_detail():
+    import time as _time
+    result = {"backend": "ok"}
+    try:
+        import psutil
+        result["cpu_percent"] = round(psutil.cpu_percent(interval=0.3), 1)
+        result["ram_percent"] = round(psutil.virtual_memory().percent, 1)
+        result["disk_percent"] = round(psutil.disk_usage("/").percent, 1)
+        result["uptime_hours"] = round((_time.time() - psutil.boot_time()) / 3600, 1)
+    except Exception:
+        result["cpu_percent"] = result["ram_percent"] = result["disk_percent"] = result["uptime_hours"] = None
+    # DingTalk WAL status
+    try:
+        from app.tasks.health_monitor import WAL_PATH, WAL_STALE_SECONDS
+        import os
+        mtime = os.path.getmtime(WAL_PATH)
+        age_min = int((_time.time() - mtime) / 60)
+        result["dingtalk"] = {
+            "status": "alive" if (_time.time() - mtime) < WAL_STALE_SECONDS else "stale",
+            "wal_age_minutes": age_min,
+        }
+    except Exception:
+        result["dingtalk"] = {"status": "unknown"}
+    # Chaoxing
+    result["chaoxing"] = {"logged_in": getattr(app.state.chaoxing_svc, "is_logged_in", False)}
+    return result
+
+
 from app.routers import conversations, chat, schedule, chaoxing, providers, settings as settings_router, push, reminders, data, analytics
 from app.dingtalk.router import router as dingtalk_router
 
