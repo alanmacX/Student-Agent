@@ -55,7 +55,8 @@ export default function TokenStats() {
   const maxTokens = Math.max(...daily.map(d => d.total.input_tokens + d.total.output_tokens), 1);
 
   return (
-    <div className="space-y-4">
+    <div className="max-w-2xl space-y-4">
+      <h2 className="text-lg font-semibold text-white">用量统计</h2>
       {/* Period selector */}
       <div className="flex justify-end gap-1">
         {PERIODS.map(({ days, label }) => (
