@@ -19,6 +19,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 echo ""
 echo "  Student-Agent 安装程序"
 echo "  ───────────────────────────────────────"
@@ -42,6 +44,26 @@ else
   die "未找到 Docker Compose v2。请升级 Docker 或单独安装 docker-compose-plugin。"
 fi
 ok "Compose: $($COMPOSE version --short 2>/dev/null || echo 'ok')"
+
+# Docker mirror — ensure China-accessible registry mirrors are configured
+DAEMON_JSON="/etc/docker/daemon.json"
+if [[ -f "$DAEMON_JSON" ]] && grep -q "registry-mirrors" "$DAEMON_JSON" 2>/dev/null; then
+  ok "Docker 镜像加速器已配置"
+else
+  info "配置 Docker 镜像加速器..."
+  mkdir -p /etc/docker
+  cat > "$DAEMON_JSON" <<'MIRROR'
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://docker.1ms.run"
+  ]
+}
+MIRROR
+  systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true
+  sleep 2
+  ok "Docker 镜像加速器已配置 (daocloud + 1ms.run)"
+fi
 
 # Port check
 if ss -tlnp "sport = :${PORT}" 2>/dev/null | grep -q LISTEN; then
@@ -139,29 +161,71 @@ if [[ "${SETUP_DT,,}" == "y" ]]; then
   fi
 
   # ── 3. 安装钉钉 Linux 客户端 ──────────────────────────────────────────────
-  DT_BIN=$(ls /opt/apps/com.alibabainc.dingtalk/files/*/com.alibabainc.dingtalk 2>/dev/null | sort -V | tail -1)
+  # Use 'find -type f' to avoid matching directories like 'doc/'
+  DT_BIN=$(find /opt/apps/com.alibabainc.dingtalk/files -name com.alibabainc.dingtalk -type f 2>/dev/null | sort -V | tail -1)
   if [[ -z "$DT_BIN" ]]; then
     info "下载钉钉 Linux 客户端..."
-    DT_URL="https://dtapp-pub.dingtalk.com/dingtalk-desktop/xc_dingtalk_update/linux_deb/Release/com.alibabainc.dingtalk_7.6.55-Release.2410312_amd64.deb"
     DT_DEB="/tmp/dingtalk.deb"
-    if command -v wget &>/dev/null; then
-      wget -q --show-progress -O "$DT_DEB" "$DT_URL" || { warn "下载失败，请手动安装钉钉"; }
+
+    # Try cached .deb first
+    if [[ ! -f "$DT_DEB" ]]; then
+      DT_URL="https://dtapp-pub.dingtalk.com/dingtalk-desktop/xc_dingtalk_update/linux_deb/Release/com.alibabainc.dingtalk_7.6.55-Release.2410312_amd64.deb"
+      if command -v wget &>/dev/null; then
+        wget -q --show-progress -O "$DT_DEB" "$DT_URL" || { warn "下载失败，请手动安装钉钉"; }
+      else
+        curl -fL -o "$DT_DEB" "$DT_URL" || { warn "下载失败，请手动安装钉钉"; }
+      fi
     else
-      curl -fL -o "$DT_DEB" "$DT_URL" || { warn "下载失败，请手动安装钉钉"; }
+      ok "使用缓存的安装包: $DT_DEB"
     fi
+
     if [[ -f "$DT_DEB" ]]; then
-      dpkg -i "$DT_DEB" 2>/dev/null || apt-get install -f -y -q
-      DT_BIN=$(ls /opt/apps/com.alibabainc.dingtalk/files/*/com.alibabainc.dingtalk 2>/dev/null | sort -V | tail -1)
+      # Install .deb — works on both Debian (dpkg) and RPM (manual extract) systems
+      if command -v dpkg &>/dev/null; then
+        dpkg -i "$DT_DEB" 2>/dev/null || apt-get install -f -y -q
+      else
+        # RPM-based system: extract .deb manually
+        info "RPM 系统，手动解包 .deb..."
+        TMPDIR=$(mktemp -d)
+        (cd "$TMPDIR" && ar x "$DT_DEB" && tar xf data.tar.xz -C /)
+        rm -rf "$TMPDIR"
+      fi
+      DT_BIN=$(find /opt/apps/com.alibabainc.dingtalk/files -name com.alibabainc.dingtalk -type f 2>/dev/null | sort -V | tail -1)
       ok "钉钉已安装: $DT_BIN"
     fi
   else
     ok "钉钉已安装: $DT_BIN"
   fi
 
+  # ── 3b. 修复库冲突 ────────────────────────────────────────────────────────
+  # DingTalk bundles system libs (libm.so.6, libcrypto.so.1.1) that conflict with
+  # the host. Its RUNPATH is set to './' which forces loading from the install dir.
+  # Fix: remove conflicting system libs, create separate dir for DingTalk-specific libs.
+  if [[ -n "$DT_BIN" ]]; then
+    DT_DIR="$(dirname "$DT_BIN")"
+
+    # Remove bundled system libs that conflict with host
+    for lib in libm.so.6 libc.so.6 libpthread.so.0 libdl.so.2 librt.so.1 libresolv.so.2; do
+      rm -f "$DT_DIR/$lib" 2>/dev/null
+    done
+
+    # Create separate lib directory with DingTalk-specific libraries only
+    DT_LIBS="/opt/dingtalk-libs"
+    mkdir -p "$DT_LIBS"
+    # Link libs from subdirectories (plugins, audio, etc.) — not the main dir
+    find "$DT_DIR" -mindepth 2 -name '*.so' -exec ln -sf {} "$DT_LIBS/" \; 2>/dev/null
+    # Link DingTalk-specific libs from main dir (libdtfbase, libcef, etc.)
+    for lib in libdtfbase.so libcef.so libapp.so libdingtalk_*.so; do
+      [[ -f "$DT_DIR/$lib" ]] && ln -sf "$DT_DIR/$lib" "$DT_LIBS/" 2>/dev/null
+    done
+    ok "库冲突已修复"
+  fi
+
   # ── 4. 启动钉钉 ───────────────────────────────────────────────────────────
   if [[ -n "$DT_BIN" ]] && ! pgrep -f com.alibabainc.dingtalk &>/dev/null; then
     info "启动钉钉..."
-    DISPLAY=:99 "$DT_BIN" --no-sandbox &>/dev/null &
+    DT_DIR="$(dirname "$DT_BIN")"
+    DISPLAY=:99 LD_LIBRARY_PATH="/opt/dingtalk-libs" "$DT_BIN" --no-sandbox &>/dev/null &
     sleep 3
     ok "钉钉已启动"
   elif pgrep -f com.alibabainc.dingtalk &>/dev/null; then
@@ -171,7 +235,7 @@ if [[ "${SETUP_DT,,}" == "y" ]]; then
   # ── 5. 启动截图辅助服务 (QR server) ──────────────────────────────────────
   if ! ss -tlnp 2>/dev/null | grep -q ':7777'; then
     info "启动截图辅助服务 (port 7777)..."
-    DISPLAY=:99 python3 "$(dirname "$0")/dingtalk_qr_server.py" &>/tmp/dingtalk_qr.log &
+    DISPLAY=:99 python3 "$SCRIPT_DIR/dingtalk_qr_server.py" &>/tmp/dingtalk_qr.log &
     sleep 1
     if ss -tlnp 2>/dev/null | grep -q ':7777'; then
       ok "截图服务已启动"
@@ -183,8 +247,12 @@ if [[ "${SETUP_DT,,}" == "y" ]]; then
   fi
 
   # ── 6. 安装 systemd 服务（持久化重启）────────────────────────────────────
-  SYSTEMD_DIR="$(dirname "$0")/systemd"
+  SYSTEMD_DIR="$SCRIPT_DIR/systemd"
   if command -v systemctl &>/dev/null && [[ -d "$SYSTEMD_DIR" ]]; then
+    # Deploy wrapper script
+    cp "$SCRIPT_DIR/start-dingtalk.sh" /opt/chatbot/server-src/start-dingtalk.sh 2>/dev/null || true
+    chmod +x /opt/chatbot/server-src/start-dingtalk.sh 2>/dev/null || true
+
     for svc in dingtalk-xvfb dingtalk dingtalk-qr; do
       cp "$SYSTEMD_DIR/${svc}.service" /etc/systemd/system/ 2>/dev/null && \
         systemctl enable "$svc" &>/dev/null && \
