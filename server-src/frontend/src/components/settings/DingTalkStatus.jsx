@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   RefreshCw, Loader2, CheckCircle2, AlertCircle, Play,
   MessageSquare, Clock, Filter, Plus, X, ChevronDown, ChevronUp, Info,
+  QrCode, Smartphone,
 } from "lucide-react";
 import { apiFetch } from "../../api/client";
 
@@ -27,11 +28,118 @@ function StatCard({ icon, label, value }) {
 }
 
 // ── Status tab ─────────────────────────────────────────────────────────────
-function StatusTab({ status, onSync, onResume, onRefresh, syncing, resuming, loading }) {
+// ── QR login panel ────────────────────────────────────────────────────────
+function QRLoginPanel({ onLoginDetected }) {
+  const [imgSrc, setImgSrc] = useState(null);
+  const [qrError, setQrError] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(false);
+  const refreshRef = useRef(null);
+  const pollRef = useRef(null);
+
+  const refreshQR = useCallback(() => {
+    // Cache-bust so browser always fetches fresh screenshot
+    setImgSrc(`/api/dingtalk/qr-screenshot?t=${Date.now()}`);
+  }, []);
+
+  const checkLogin = useCallback(async () => {
+    try {
+      const res = await apiFetch("/api/dingtalk/login-status");
+      if (res.logged_in) {
+        setLoggedIn(true);
+        clearInterval(refreshRef.current);
+        clearInterval(pollRef.current);
+        setTimeout(onLoginDetected, 1200);
+      }
+    } catch (_) {}
+  }, [onLoginDetected]);
+
+  useEffect(() => {
+    refreshQR();
+    refreshRef.current = setInterval(refreshQR, 3000);  // refresh screenshot every 3s
+    pollRef.current   = setInterval(checkLogin, 2500);  // poll login every 2.5s
+    return () => {
+      clearInterval(refreshRef.current);
+      clearInterval(pollRef.current);
+    };
+  }, [refreshQR, checkLogin]);
+
+  if (loggedIn) return (
+    <div className="flex flex-col items-center gap-3 py-8">
+      <CheckCircle2 size={48} className="text-green-400" />
+      <p className="text-sm font-semibold text-green-300">登录成功！</p>
+      <p className="text-xs text-[var(--text-tertiary)]">正在刷新状态…</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 rounded-xl bg-[var(--deep-bg)] p-3 text-xs text-[var(--text-secondary)]">
+        <Smartphone size={13} className="shrink-0 text-[var(--accent)]" />
+        <span>用手机钉钉扫描下方二维码完成登录，扫码后自动检测。</span>
+      </div>
+
+      <div className="relative overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--deep-bg)]">
+        {imgSrc && !qrError ? (
+          <img
+            src={imgSrc}
+            alt="DingTalk QR"
+            className="w-full object-contain"
+            style={{ maxHeight: 360 }}
+            onError={() => setQrError(true)}
+            onLoad={() => setQrError(false)}
+          />
+        ) : (
+          <div className="flex flex-col items-center gap-3 py-12 text-[var(--text-tertiary)]">
+            {qrError
+              ? <><AlertCircle size={28} className="text-amber-400" /><p className="text-xs">截图服务不可用<br/>请确认 dingtalk-qr.service 已启动</p></>
+              : <><Loader2 size={24} className="animate-spin" /><p className="text-xs">加载截图…</p></>
+            }
+          </div>
+        )}
+        {/* Subtle refresh indicator */}
+        <div className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-black/40 px-2 py-0.5 text-[10px] text-white/60">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />
+          自动刷新
+        </div>
+      </div>
+
+      <button onClick={refreshQR}
+        className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--hover-bg)] py-2.5 text-xs text-[var(--text-secondary)] hover:text-white transition-colors">
+        <RefreshCw size={12} /> 手动刷新截图
+      </button>
+    </div>
+  );
+}
+
+// ── Status tab ─────────────────────────────────────────────────────────────
+function StatusTab({ status, loggedIn, onSync, onResume, onRefresh, syncing, resuming, loading, onLoginDetected }) {
+  const [showQR, setShowQR] = useState(false);
+
   if (loading) return <div className="py-12 text-center"><Loader2 size={24} className="mx-auto animate-spin text-[var(--text-tertiary)]" /></div>;
+
+  // Not-logged-in state — show QR panel
+  if (!loggedIn) return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+        <AlertCircle size={20} className="shrink-0 text-amber-400" />
+        <div>
+          <p className="text-sm font-medium text-amber-300">钉钉未登录</p>
+          <p className="text-xs text-[var(--text-tertiary)]">扫码登录后即可开始监听消息</p>
+        </div>
+      </div>
+      <button onClick={() => setShowQR(v => !v)}
+        className="flex w-full items-center justify-center gap-2 min-h-11 rounded-2xl bg-[var(--accent)] text-sm font-semibold text-white hover:bg-[var(--accent-strong)] transition-colors">
+        <QrCode size={16} />
+        {showQR ? "隐藏二维码" : "扫码登录"}
+      </button>
+      {showQR && <QRLoginPanel onLoginDetected={() => { setShowQR(false); onRefresh(); onLoginDetected?.(); }} />}
+    </div>
+  );
+
   const alive = status?.client_alive;
   const stopped = status?.process_status === "stopped";
   const notRunning = status?.process_status === "not_running";
+
   return (
     <div className="space-y-4">
       <div className={`rounded-2xl border p-4 ${alive ? "border-green-500/30 bg-green-500/10" : "border-amber-500/30 bg-amber-500/10"}`}>
@@ -275,6 +383,7 @@ function FilterTab({ dbConversations, loadingConvs }) {
 export default function DingTalkStatus() {
   const [tab, setTab] = useState("status");
   const [status, setStatus] = useState(null);
+  const [loggedIn, setLoggedIn] = useState(null); // null = unknown
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -283,7 +392,14 @@ export default function DingTalkStatus() {
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    try { setStatus(await apiFetch("/api/dingtalk/status")); } catch (_) {}
+    try {
+      const [s, l] = await Promise.all([
+        apiFetch("/api/dingtalk/status"),
+        apiFetch("/api/dingtalk/login-status"),
+      ]);
+      setStatus(s);
+      setLoggedIn(l.logged_in);
+    } catch (_) {}
     finally { setLoading(false); }
   }, []);
 
@@ -325,8 +441,10 @@ export default function DingTalkStatus() {
       </div>
 
       {tab === "status"
-        ? <StatusTab status={status} loading={loading} syncing={syncing} resuming={resuming}
-            onSync={handleSync} onResume={handleResume} onRefresh={refresh} />
+        ? <StatusTab status={status} loggedIn={loggedIn} loading={loading}
+            syncing={syncing} resuming={resuming}
+            onSync={handleSync} onResume={handleResume} onRefresh={refresh}
+            onLoginDetected={refresh} />
         : <FilterTab dbConversations={conversations} loadingConvs={loadingConvs} />
       }
     </div>

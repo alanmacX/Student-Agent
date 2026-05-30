@@ -4,12 +4,17 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # DingTalk client DB (read-only mount). The *_v3 folder is account-scoped;
-      # override via .env if the account changes.
-      - DINGTALK_DB_SOURCE=/dingtalk_db/dingtalk.db
+      # Point to the mounted config dir; dingtalk_service.py globs for *_v3/DBFiles/dingtalk.db
+      - DINGTALK_DB_SOURCE=/dingtalk_cfg
+      # Screenshot helper runs on host port 7777; backend calls it for QR images
+      - DINGTALK_QR_SERVICE=http://host.docker.internal:7777
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - chatbot_data:/data
-      - /root/.config/DingTalk/ec87a3f86468e8572679_v3/DBFiles:/dingtalk_db:ro
+      # Mount the *entire* DingTalk config dir so we can glob for the account-
+      # scoped *_v3 subdirectory without hardcoding the user ID.
+      - /root/.config/DingTalk:/dingtalk_cfg:ro
     expose:
       - "8000"
     healthcheck:

@@ -1,0 +1,15 @@
+[Unit]
+Description=DingTalk QR Screenshot Helper
+After=dingtalk.service
+Requires=dingtalk-xvfb.service
+
+[Service]
+Type=simple
+Environment=DISPLAY=:99
+WorkingDirectory=/opt/chatbot
+ExecStart=/usr/bin/python3 /opt/chatbot/dingtalk_qr_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

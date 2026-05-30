@@ -10,15 +10,90 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 logger = logging.getLogger("dingtalk")
 
 KEY = b"9f6ac1b97a9021bd"
-DB_SOURCE = os.getenv(
-    "DINGTALK_DB_SOURCE",
-    "/root/.config/DingTalk/ec87a3f86468e8572679_v3/DBFiles/dingtalk.db",
-)
+
+def _discover_db_path() -> str:
+    """Auto-discover the DingTalk SQLite DB by globbing the config dir.
+
+    Supports two env var patterns:
+      DINGTALK_DB_SOURCE=/path/to/dingtalk.db   — explicit file path (legacy)
+      DINGTALK_DB_SOURCE=/dingtalk_cfg           — config dir, glob for *_v3/DBFiles/dingtalk.db
+    """
+    import glob
+    raw = os.getenv("DINGTALK_DB_SOURCE", "")
+    if raw and not raw.endswith("/") and Path(raw).suffix == ".db":
+        return raw  # explicit file path
+
+    # Glob inside a config directory (new default: /dingtalk_cfg mounted in docker)
+    cfg_dir = raw.rstrip("/") if raw else "/dingtalk_cfg"
+    candidates = sorted(glob.glob(f"{cfg_dir}/*_v3/DBFiles/dingtalk.db"))
+    if candidates:
+        return candidates[0]
+
+    # Fallback: host path (when running outside docker)
+    host_candidates = sorted(glob.glob(
+        "/root/.config/DingTalk/*_v3/DBFiles/dingtalk.db"
+    ))
+    return host_candidates[0] if host_candidates else \
+        "/root/.config/DingTalk/ec87a3f86468e8572679_v3/DBFiles/dingtalk.db"
+
+DB_SOURCE = _discover_db_path()
 DB_WAL = os.getenv("DINGTALK_DB_WAL", DB_SOURCE + "-wal")
 DECRYPTED_DB_PATH = os.getenv("DINGTALK_DECRYPTED_PATH", "/tmp/dingtalk_decrypted.db")
 PAGE_SIZE = int(os.getenv("DINGTALK_PAGE_SIZE", "4096"))
 WAL_HDR_SIZE = 32
 FRAME_HDR_SIZE = 24
+
+# Screenshot helper service on the host (started by install.sh / systemd)
+QR_SERVICE_URL = os.getenv("DINGTALK_QR_SERVICE", "http://host.docker.internal:7777")
+
+
+def is_dingtalk_logged_in() -> bool:
+    """True when a DingTalk account DB exists and has user profile data.
+
+    Globs for the account-scoped *_v3 directory under the config mount,
+    then decrypts the DB and checks tbuser_profile_v2.
+    Note: the encrypted DB file itself may be tiny (4 KB) when all data is
+    in the WAL — don't use file size as a proxy for login state.
+    """
+    import glob
+    cfg_dir = os.getenv("DINGTALK_DB_SOURCE", "/dingtalk_cfg").rstrip("/")
+    if cfg_dir.endswith(".db"):
+        cfg_dir = str(Path(cfg_dir).parent.parent.parent)
+
+    account_dirs = glob.glob(f"{cfg_dir}/*_v3")
+    if not account_dirs:
+        account_dirs = glob.glob("/root/.config/DingTalk/*_v3")
+    if not account_dirs:
+        return False
+
+    db = Path(account_dirs[0]) / "DBFiles" / "dingtalk.db"
+    if not db.exists():
+        return False
+
+    try:
+        decrypted = decrypt_db_to_tmp(str(db))
+        conn = sqlite3.connect(decrypted)
+        count = conn.execute("SELECT COUNT(*) FROM tbuser_profile_v2").fetchone()[0]
+        conn.close()
+        return count > 0
+    except Exception:
+        return False
+
+
+async def fetch_qr_screenshot() -> bytes | None:
+    """Fetch a PNG screenshot from the host-side QR helper service.
+
+    Returns raw PNG bytes, or None if the service is unreachable.
+    """
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{QR_SERVICE_URL}/screenshot")
+            if r.status_code == 200:
+                return r.content
+    except Exception:
+        pass
+    return None
 
 
 def _aes_cipher():

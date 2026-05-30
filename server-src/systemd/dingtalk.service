@@ -1,0 +1,15 @@
+[Unit]
+Description=DingTalk Linux Client (headless)
+After=dingtalk-xvfb.service
+Requires=dingtalk-xvfb.service
+
+[Service]
+Type=simple
+Environment=DISPLAY=:99
+ExecStartPre=/bin/sleep 2
+ExecStart=/bin/bash -c 'exec "$(ls /opt/apps/com.alibabainc.dingtalk/files/*/com.alibabainc.dingtalk | sort -V | tail -1)" --no-sandbox'
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

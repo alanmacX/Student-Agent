@@ -6,8 +6,9 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import Response
 
-from app.dingtalk.dingtalk_service import get_conversations
+from app.dingtalk.dingtalk_service import get_conversations, is_dingtalk_logged_in, fetch_qr_screenshot
 from app.dingtalk.schema import ensure_schema
 from app.dingtalk.task import run_dingtalk_sync, bootstrap_to_current
 
@@ -60,6 +61,29 @@ async def get_interest(
 ):
     """The "你可能感兴趣" bucket."""
     return _query(_db_path(request), "verdict = ? AND created_at > ?", ["interest", since], limit)
+
+
+@router.get("/qr-screenshot")
+async def qr_screenshot():
+    """Return a PNG screenshot of the DingTalk window (for QR-code login flow).
+
+    Returns 204 when DingTalk is already logged in (no need to show QR).
+    Returns 503 when the screenshot helper is unreachable.
+    """
+    if is_dingtalk_logged_in():
+        return Response(status_code=204)
+    data = await fetch_qr_screenshot()
+    if data is None:
+        return Response(status_code=503, content=b"QR service unavailable")
+    return Response(content=data, media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+@router.get("/login-status")
+async def login_status():
+    """Check whether DingTalk is logged in. Polled by the frontend during QR flow."""
+    logged_in = is_dingtalk_logged_in()
+    return {"logged_in": logged_in}
 
 
 @router.get("/conversations")
