@@ -41,7 +41,7 @@ async def health():
     return {"status": "ok", "chaoxing_logged_in": app.state.chaoxing_svc.is_logged_in}
 
 
-from app.routers import conversations, chat, schedule, chaoxing, providers, settings as settings_router, push, reminders, data
+from app.routers import conversations, chat, schedule, chaoxing, providers, settings as settings_router, push, reminders, data, analytics
 from app.dingtalk.router import router as dingtalk_router
 
 app.include_router(conversations.router)
@@ -55,6 +55,7 @@ app.include_router(push.notifications_router)
 app.include_router(reminders.router)
 app.include_router(data.router)
 app.include_router(dingtalk_router)
+app.include_router(analytics.router)
 
 if settings.debug:
     from app.routers.debug import router as debug_router

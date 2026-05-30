@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 import zoneinfo
@@ -323,7 +324,7 @@ def _filter_schedule_tools(tools: list, user_message: str) -> list:
         "cancel_scheduled_notification": ["取消推送", "取消定时", "取消通知", "取消提醒"],
         "send_push_notification":      ["推送", "通知", "发送通知", "立刻通知", "马上提醒", "提醒我", "截止", "deadline"],
         "get_memory_insights":         ["学习通", "记忆", "memory", "洞察", "分析"],
-        "get_system_status":           ["系统", "状态", "运行", "standby", "登录"],
+        "get_system_status":           ["系统", "状态", "运行", "standby", "登录", "cpu", "内存", "ram", "磁盘", "disk", "健康", "health", "运行时间", "uptime", "钉钉状态"],
         "trigger_memory_scan":         ["扫描", "立刻检查", "帮我扫", "触发扫描", "检查学习通"],
         "set_push_config":             ["静默", "免打扰", "推送设置", "推送配置", "间隔", "quiet"],
     }
@@ -673,7 +674,7 @@ def _build_schedule_tools() -> list:
         ),
         ToolDefinition(
             name="get_system_status",
-            description="查看系统运行状态：standby agent 最近决策、待发通知数、学习通登录状态、内存条目数。",
+            description="查看系统运行状态：CPU、内存、磁盘使用率，钉钉连接状态，学习通登录状态，standby agent 最近决策，待发通知数，内存条目数，系统运行时间。",
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         ),
         ToolDefinition(
@@ -963,6 +964,36 @@ async def _execute_schedule_tool(
             return json.dumps({"ok": True, "count": 0, "message": "暂无未过期的 Memory 条目。"})
         return json.dumps({"ok": True, "count": len(entries), "entries": entries}, ensure_ascii=False)
     elif tc.name == "get_system_status":
+        # Server metrics (psutil)
+        cpu_percent = ram_percent = disk_percent = uptime_hours = None
+        try:
+            import psutil
+            cpu_percent = psutil.cpu_percent(interval=0.5)
+            ram_percent = psutil.virtual_memory().percent
+            disk_percent = psutil.disk_usage("/").percent
+            uptime_hours = round((time.time() - psutil.boot_time()) / 3600, 1)
+        except ImportError:
+            pass
+
+        # DingTalk WAL freshness
+        dingtalk_status = {"status": "unknown"}
+        try:
+            from app.tasks.health_monitor import WAL_PATH, WAL_STALE_SECONDS
+            import os as _os
+            mtime = _os.path.getmtime(WAL_PATH)
+            age_min = int((time.time() - mtime) / 60)
+            dingtalk_status = {
+                "status": "alive" if (time.time() - mtime) < WAL_STALE_SECONDS else "stale",
+                "wal_age_minutes": age_min,
+            }
+        except (FileNotFoundError, Exception):
+            dingtalk_status = {"status": "not_running"}
+
+        # Chaoxing login
+        chaoxing_logged_in = False
+        if chaoxing_svc:
+            chaoxing_logged_in = getattr(chaoxing_svc, "is_logged_in", False)
+
         async with aiosqlite.connect(db_path) as db:
             standby_rows = await (await db.execute(
                 "SELECT ran_at, decision, push_title, input_tokens FROM standby_agent_log ORDER BY ran_at DESC LIMIT 3"
@@ -976,6 +1007,12 @@ async def _execute_schedule_tool(
             sub_count = (await (await db.execute("SELECT COUNT(*) FROM push_subscriptions")).fetchone())[0]
         return json.dumps({
             "ok": True,
+            "cpu_percent": cpu_percent,
+            "ram_percent": ram_percent,
+            "disk_percent": disk_percent,
+            "uptime_hours": uptime_hours,
+            "dingtalk": dingtalk_status,
+            "chaoxing": {"logged_in": chaoxing_logged_in},
             "push_subscribers": sub_count,
             "pending_notifications": pending_notifs,
             "active_memory_entries": memory_count,

@@ -1,9 +1,10 @@
-import { MessageSquare, Calendar, Settings, Bell, RefreshCw } from "lucide-react";
+import { MessageSquare, Calendar, Settings, Bell, RefreshCw, Lightbulb } from "lucide-react";
 import { useState } from "react";
 
 const TABS = [
   { id: "overview", label: "总览", icon: Calendar },
   { id: "agent", label: "Agent", icon: MessageSquare },
+  { id: "hub", label: "Hub", icon: Lightbulb },
   { id: "notifications", label: "通知", icon: Bell },
   { id: "settings", label: "设置", icon: Settings },
 ];

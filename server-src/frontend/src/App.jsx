@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback, Component } from "react";
-import { Calendar, MessageSquare, Settings, Bell } from "lucide-react";
+import { Calendar, MessageSquare, Settings, Bell, Lightbulb } from "lucide-react";
 import TabBar from "./components/layout/TabBar";
 import ScheduleOverview from "./components/schedule/ScheduleOverview";
 import ScheduleView from "./components/schedule/ScheduleView";
 import SettingsView from "./components/settings/SettingsView";
 import NotificationCenter from "./components/notifications/NotificationCenter";
+import HubView from "./components/hub/HubView";
 import DailyPopup from "./components/notifications/DailyPopup";
 
-const VALID_TABS = ["overview", "agent", "notifications", "settings"];
+const VALID_TABS = ["overview", "agent", "hub", "notifications", "settings"];
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -155,6 +156,7 @@ function App() {
           <ErrorBoundary>
             <div className={tab !== "overview" ? "hidden" : "h-full"}><ScheduleOverview /></div>
             <div className={tab !== "agent" ? "hidden" : "h-full"}><ScheduleView /></div>
+            <div className={tab !== "hub" ? "hidden" : "h-full"}><HubView /></div>
             <div className={tab !== "notifications" ? "hidden" : "h-full"}><NotificationCenter /></div>
             <div className={tab !== "settings" ? "hidden" : "h-full"}><SettingsView /></div>
           </ErrorBoundary>
@@ -172,6 +174,7 @@ function App() {
         {[
           { id: "overview", label: "总览", icon: Calendar },
           { id: "agent", label: "Agent", icon: MessageSquare },
+          { id: "hub", label: "Hub", icon: Lightbulb },
           { id: "notifications", label: "通知", icon: Bell },
           { id: "settings", label: "设置", icon: Settings },
         ].map(({ id, label, icon: Icon }) => (

@@ -275,7 +275,12 @@ async def run_agentic_loop(
         response = await agent_complete(current_messages, tools, provider, model, api_key, thinking_budget)
 
         if response.usage:
-            yield {"type": "usage", "usage": _usage_to_dict(response.usage)}
+            usage_dict = _usage_to_dict(response.usage)
+            from .api_service import estimate_cost
+            cost = estimate_cost(model, response.usage.input_tokens, response.usage.output_tokens)
+            if cost is not None:
+                usage_dict["estimated_cost_usd"] = round(cost, 6)
+            yield {"type": "usage", "usage": usage_dict}
 
         if not response.tool_calls:
             final_text = (response.text or "").strip()

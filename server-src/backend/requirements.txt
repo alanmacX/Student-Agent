@@ -8,3 +8,4 @@ pywebpush==2.0.0
 py-vapid==1.9.1
 python-multipart==0.0.9
 pycryptodome>=3.19.0
+psutil>=5.9.0

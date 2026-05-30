@@ -59,6 +59,20 @@ KNOWN_PRICING: dict[str, tuple[float, float]] = {
 }
 
 
+def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float | None:
+    """Estimate cost in USD for a given model and token counts."""
+    pricing = KNOWN_PRICING.get(model)
+    if not pricing:
+        for known_model, prices in KNOWN_PRICING.items():
+            if model.startswith(known_model) or known_model.startswith(model):
+                pricing = prices
+                break
+    if not pricing:
+        return None
+    input_rate, output_rate = pricing
+    return (input_tokens * input_rate + output_tokens * output_rate) / 1_000_000
+
+
 def economical_model(provider_id: str) -> str:
     prefix = {"openai": "gpt-", "anthropic": "claude-", "gemini": "gemini-", "xiaomimimo": "mimo-"}.get(
         provider_id, ""

@@ -377,6 +377,7 @@ async def stream_schedule_chat(request: Request):
         nonlocal next_pos
         full_response = ""
         schedule_payload = None
+        usage_data = None
 
         try:
             print(f"[SCHED] generate() start, user_message={user_message[:60]!r}", flush=True)
@@ -389,6 +390,8 @@ async def stream_schedule_chat(request: Request):
                     full_response += event["content"]
                 elif etype == "schedule_payload":
                     schedule_payload = event
+                elif etype == "usage":
+                    usage_data = event.get("usage")
                 elif etype not in ("usage",):
                     print(f"[SCHED] event type={etype}", flush=True)
                 yield f"data: {json.dumps(event)}\n\n"
@@ -398,9 +401,10 @@ async def stream_schedule_chat(request: Request):
             # Save assistant message
             async with db_conn() as db:
                 payload_json = json.dumps(schedule_payload) if schedule_payload else None
+                usage_json = json.dumps(usage_data) if usage_data else None
                 await db.execute(
-                    "INSERT INTO schedule_messages (id, session_id, role, content, schedule_payload_json, timestamp, position) VALUES (?,?,?,?,?,?,?)",
-                    (str(uuid.uuid4()), session_id, "assistant", full_response, payload_json, datetime.utcnow().isoformat(), next_pos),
+                    "INSERT INTO schedule_messages (id, session_id, role, content, usage_json, schedule_payload_json, timestamp, position) VALUES (?,?,?,?,?,?,?,?)",
+                    (str(uuid.uuid4()), session_id, "assistant", full_response, usage_json, payload_json, datetime.utcnow().isoformat(), next_pos),
                 )
                 await db.commit()
 
