@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EEF3FF"/>
+      <stop offset="100%" stop-color="#DDE8FF"/>
+    </linearGradient>
+    <linearGradient id="archGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4DA3FF"/>
+      <stop offset="100%" stop-color="#0A5FE8"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="12" flood-color="#1A4FBB" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="116" ry="116" fill="url(#bg)"/>
+  <!-- Inner border -->
+  <rect width="512" height="512" rx="116" ry="116" fill="none" stroke="#FFFFFF" stroke-width="2" opacity="0.8"/>
+
+  <!-- Arch ground shadow -->
+  <ellipse cx="256" cy="344" rx="132" ry="16" fill="#90B8FF" opacity="0.22"/>
+
+  <!-- Main arch -->
+  <g filter="url(#softShadow)">
+    <path d="M 108 332 A 148 148 0 0 1 404 332"
+      fill="none" stroke="url(#archGrad)" stroke-width="56" stroke-linecap="round"/>
+  </g>
+  <!-- Arch inner highlight -->
+  <path d="M 130 320 A 126 126 0 0 1 382 320"
+    fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" opacity="0.4"/>
+
+  <!-- Left pillar -->
+  <rect x="82" y="328" width="56" height="78" rx="11" fill="url(#archGrad)" filter="url(#softShadow)"/>
+  <rect x="89" y="330" width="13" height="74" rx="6" fill="#FFFFFF" opacity="0.18"/>
+
+  <!-- Right pillar -->
+  <rect x="374" y="328" width="56" height="78" rx="11" fill="url(#archGrad)" filter="url(#softShadow)"/>
+  <rect x="381" y="330" width="13" height="74" rx="6" fill="#FFFFFF" opacity="0.18"/>
+
+  <!-- Base line -->
+  <rect x="68" y="404" width="376" height="13" rx="6.5" fill="#B8D0FF" opacity="0.65"/>
+
+  <!-- Sparkle star (4-point) centered above arch -->
+  <g transform="translate(256,148)">
+    <path d="M0,-30 C2,-10 10,-2 30,0 C10,2 2,10 0,30 C-2,10 -10,2 -30,0 C-10,-2 -2,-10 0,-30Z"
+      fill="#0A5FE8"/>
+    <path d="M0,-17 C1,-6 6,-1 17,0 C6,1 1,6 0,17 C-1,6 -6,1 -17,0 C-6,-1 -1,-6 0,-17Z"
+      fill="#5AADFF"/>
+    <circle cx="0" cy="0" r="4.5" fill="#FFFFFF"/>
+  </g>
+
+  <!-- Small accent dots -->
+  <circle cx="206" cy="144" r="5.5" fill="#5AADFF" opacity="0.5"/>
+  <circle cx="306" cy="144" r="5.5" fill="#5AADFF" opacity="0.5"/>
+  <circle cx="190" cy="168" r="3.5" fill="#8ECEFF" opacity="0.38"/>
+  <circle cx="322" cy="168" r="3.5" fill="#8ECEFF" opacity="0.38"/>
+</svg>
