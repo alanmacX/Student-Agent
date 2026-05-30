@@ -6,8 +6,8 @@ Requires=dingtalk-xvfb.service
 [Service]
 Type=simple
 Environment=DISPLAY=:99
-WorkingDirectory=/opt/chatbot
-ExecStart=/usr/bin/python3 /opt/chatbot/dingtalk_qr_server.py
+WorkingDirectory=/opt/chatbot/server-src
+ExecStart=/usr/bin/python3 /opt/chatbot/server-src/dingtalk_qr_server.py
 Restart=always
 RestartSec=5
 
