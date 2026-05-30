@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
-import { Lightbulb, StickyNote, Clock, Trash2, Plus, ExternalLink } from "lucide-react";
-import { fetchReminders } from "../../api/reminders";
-import TokenStats from "./TokenStats";
+import { useState } from "react";
+import { Lightbulb, StickyNote, Plus, Trash2 } from "lucide-react";
+import RemindersPanel from "../settings/RemindersPanel";
 
 const STORAGE_KEY = "hub_quick_notes";
 
@@ -20,22 +19,6 @@ function saveNotes(notes) {
 export default function HubView() {
   const [notes, setNotes] = useState(loadNotes);
   const [input, setInput] = useState("");
-  const [reminders, setReminders] = useState([]);
-  const [remLoading, setRemLoading] = useState(true);
-
-  // Fetch reminders
-  const loadReminders = useCallback(async () => {
-    try {
-      const data = await fetchReminders();
-      setReminders(data);
-    } catch {
-      // ignore
-    } finally {
-      setRemLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { loadReminders(); }, [loadReminders]);
 
   const addNote = () => {
     const text = input.trim();
@@ -51,13 +34,6 @@ export default function HubView() {
     setNotes(updated);
     saveNotes(updated);
   };
-
-  const activeReminders = reminders.filter((r) => !r.isCompleted);
-  const importantReminders = activeReminders.filter((r) => r.isImportant);
-  const upcomingReminders = activeReminders
-    .filter((r) => r.dueDate && new Date(r.dueDate) > new Date())
-    .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
-    .slice(0, 5);
 
   return (
     <div className="relative flex h-full flex-col bg-[var(--panel-bg)]">
@@ -117,84 +93,11 @@ export default function HubView() {
             )}
           </section>
 
-          {/* Reminders Overview */}
+          {/* Reminders — full panel migrated from Settings */}
           <section className="surface-card animate-rise p-4" style={{ animationDelay: "80ms" }}>
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Clock size={14} className="text-orange-400" />
-                <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-tertiary)]">
-                  提醒事项
-                </h3>
-              </div>
-              <a
-                href="#settings"
-                onClick={(e) => {
-                  e.preventDefault();
-                  window.location.hash = "settings";
-                }}
-                className="flex items-center gap-1 text-[10px] text-[var(--text-tertiary)] hover:text-[var(--accent)]"
-              >
-                查看全部 <ExternalLink size={10} />
-              </a>
-            </div>
-
-            {remLoading ? (
-              <div className="shimmer h-10 rounded-xl" />
-            ) : activeReminders.length === 0 ? (
-              <p className="py-4 text-center text-sm text-[var(--text-tertiary)]">暂无提醒事项</p>
-            ) : (
-              <>
-                {/* Stats */}
-                <div className="mb-3 flex gap-3">
-                  {[
-                    { label: "待完成", value: activeReminders.length, color: "text-white" },
-                    { label: "重要", value: importantReminders.length, color: "text-yellow-400" },
-                  ].map(({ label, value, color }) => (
-                    <div key={label} className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-center">
-                      <p className={`text-base font-bold tabular-nums ${color}`}>{value}</p>
-                      <p className="text-[10px] text-[var(--text-tertiary)]">{label}</p>
-                    </div>
-                  ))}
-                </div>
-                {/* Upcoming list */}
-                {upcomingReminders.length > 0 && (
-                  <div className="space-y-1">
-                    {upcomingReminders.map((r) => (
-                      <div key={r.id} className="flex items-center gap-2 rounded-lg px-2 py-1 text-sm">
-                        <span className={`h-1.5 w-1.5 rounded-full ${r.isImportant ? "bg-yellow-400" : "bg-[var(--text-tertiary)]"}`} />
-                        <span className="flex-1 truncate text-[var(--text-secondary)]">{r.title}</span>
-                        <span className="text-[10px] tabular-nums text-[var(--text-tertiary)]">
-                          {new Date(r.dueDate).toLocaleDateString("zh-CN", { month: "short", day: "numeric" })}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
+            <RemindersPanel />
           </section>
 
-          {/* Token Usage */}
-          <section className="surface-card animate-rise p-4" style={{ animationDelay: "160ms" }}>
-            <div className="mb-3 flex items-center gap-2">
-              <Lightbulb size={14} className="text-emerald-400" />
-              <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-tertiary)]">
-                Token 消耗
-              </h3>
-            </div>
-            <TokenStats />
-          </section>
-
-          {/* Extension Slots */}
-          {[1, 2].map((i) => (
-            <section
-              key={i}
-              className="animate-rise rounded-2xl border border-dashed border-[var(--border)] p-6 text-center"
-              style={{ animationDelay: `${200 + i * 80}ms` }}
-            >
-              <p className="text-sm text-[var(--text-tertiary)] opacity-40">Future extension</p>
-            </section>
-          ))}
         </div>
       </div>
     </div>

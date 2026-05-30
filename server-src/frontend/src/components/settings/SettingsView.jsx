@@ -1,8 +1,7 @@
 import { useState } from "react";
-import { Key, Bell, LogIn, AlarmClock, Database, MessageCircle } from "lucide-react";
+import { Key, Bell, LogIn, Database, MessageCircle } from "lucide-react";
 import ProviderSettings from "./ProviderSettings";
 import PushSettings from "./PushSettings";
-import RemindersPanel from "./RemindersPanel";
 import ChaoxingStatus from "../schedule/ChaoxingStatus";
 import DataPanel from "./DataPanel";
 import DingTalkStatus from "./DingTalkStatus";
@@ -12,7 +11,6 @@ const TABS = [
   { id: "chaoxing", label: "Chaoxing", mobileLabel: "学习通", icon: LogIn },
   { id: "dingtalk", label: "钉钉", mobileLabel: "钉钉", icon: MessageCircle },
   { id: "push", label: "Push", mobileLabel: "推送", icon: Bell },
-  { id: "reminders", label: "提醒事项", mobileLabel: "提醒", icon: AlarmClock },
   { id: "data", label: "数据管理", mobileLabel: "数据", icon: Database },
 ];
 
@@ -47,7 +45,6 @@ export default function SettingsView() {
         {tab === "chaoxing" && <ChaoxingStatus />}
         {tab === "dingtalk" && <DingTalkStatus />}
         {tab === "push" && <PushSettings />}
-        {tab === "reminders" && <RemindersPanel />}
         {tab === "data" && <DataPanel />}
       </div>
     </div>
