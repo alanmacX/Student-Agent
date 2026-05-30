@@ -1,0 +1,491 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+  --app-bg: #08090b;
+  --panel-bg: #111317;
+  --sidebar-bg: #15171c;
+  --bar-bg: rgba(18, 20, 25, 0.82);
+  --tab-bg: rgba(18, 20, 25, 0.92);
+  --popover-bg: rgba(29, 31, 37, 0.96);
+  --text-primary: #f5f7fb;
+  --text-secondary: #c7ccd6;
+  --text-tertiary: #818896;
+  --accent: #0a84ff;
+  --accent-strong: #0071e3;
+  --accent-soft: #66b3ff;
+  --accent-ring: rgba(10, 132, 255, 0.34);
+  /* New semantic vars */
+  --border: rgba(255, 255, 255, 0.10);
+  --hover-bg: rgba(255, 255, 255, 0.10);
+  --hover-bg-strong: rgba(255, 255, 255, 0.15);
+  --surface: rgba(255, 255, 255, 0.04);
+  --surface-2: rgba(255, 255, 255, 0.07);
+  --input-bg: rgba(0, 0, 0, 0.25);
+  --deep-bg: rgba(0, 0, 0, 0.20);
+  --overlay-bg: rgba(0, 0, 0, 0.45);
+
+  /* ── Glass & glow design system ──────────────────────────────────────────
+     One coherent recipe drives every floating control. Bodies are kept
+     translucent so the backdrop blur — not the fill — carries the material;
+     a single top-edge rim highlight + a soft ambient glow give the lit read. */
+  --glass-bg: rgba(30, 32, 42, 0.22);          /* light tint — you read through it */
+  --glass-bg-strong: rgba(30, 32, 42, 0.34);   /* for bars that need text contrast */
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-border-bright: rgba(255, 255, 255, 0.30);
+  --glass-blur: blur(3px) saturate(145%);      /* barely-there frost — content reads clearly behind */
+  --glass-rim: rgba(255, 255, 255, 0.32);      /* top-edge light catch (inset) */
+  --glass-edge-hi: rgba(255, 255, 255, 0.52);  /* refraction rim — top, where light grazes */
+  --glass-edge-lo: rgba(255, 255, 255, 0.12);  /* refraction rim — fades down the body */
+  --glass-sheen: rgba(255, 255, 255, 0.10);    /* specular sheen behind content */
+  --glass-shadow: 0 10px 36px rgba(0, 0, 0, 0.46);
+  --glass-shadow-sm: 0 3px 16px rgba(0, 0, 0, 0.34);
+
+  /* Floating tab bar shares the system; uses the stronger body for legibility. */
+  --tab-float-bg: var(--glass-bg-strong);
+
+  /* Radius */
+  --radius-card: 26px;
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-btn: 16px;
+  --radius-sm: 13px;
+  --radius-pill: 999px;
+
+  /* Transitions */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --app-bg: #f2f2f7;
+    --panel-bg: #ffffff;
+    --sidebar-bg: #f2f2f7;
+    --bar-bg: rgba(242, 242, 247, 0.82);
+    --tab-bg: rgba(242, 242, 247, 0.92);
+    --popover-bg: rgba(255, 255, 255, 0.96);
+    --text-primary: #1c1c1e;
+    --text-secondary: #3c3c43;
+    --text-tertiary: #8e8e93;
+    --accent: #007aff;
+    --accent-strong: #0051d5;
+    --accent-soft: #0051d5;
+    --accent-ring: rgba(0, 122, 255, 0.34);
+    --border: rgba(0, 0, 0, 0.10);
+    --hover-bg: rgba(0, 0, 0, 0.06);
+    --hover-bg-strong: rgba(0, 0, 0, 0.10);
+    --surface: rgba(0, 0, 0, 0.04);
+    --surface-2: rgba(0, 0, 0, 0.06);
+    --input-bg: rgba(0, 0, 0, 0.06);
+    --deep-bg: rgba(0, 0, 0, 0.04);
+    --overlay-bg: rgba(0, 0, 0, 0.40);
+
+    /* Glass material (light) — glow reads as a bright white bloom; bodies stay
+       translucent so the blurred backdrop tints them. */
+    --glass-bg: rgba(255, 255, 255, 0.42);
+    --glass-bg-strong: rgba(255, 255, 255, 0.55);
+    --glass-border: rgba(0, 0, 0, 0.08);
+    --glass-border-bright: rgba(0, 0, 0, 0.16);
+    --glass-rim: rgba(255, 255, 255, 0.90);
+    --glass-edge-hi: rgba(255, 255, 255, 0.95);
+    --glass-edge-lo: rgba(255, 255, 255, 0.40);
+    --glass-sheen: rgba(255, 255, 255, 0.50);
+    --glass-shadow: 0 10px 36px rgba(0, 0, 0, 0.14);
+    --glass-shadow-sm: 0 3px 16px rgba(0, 0, 0, 0.09);
+  }
+
+  /* Override text-white for headings/labels in light mode */
+  .text-white {
+    color: var(--text-primary);
+  }
+  /* Keep white on colored buttons */
+  .bg-\[var\(--accent\)\].text-white,
+  .bg-\[var\(--accent-strong\)\].text-white,
+  .bg-red-600.text-white,
+  .bg-red-700.text-white {
+    color: #fff !important;
+  }
+
+  .surface-card {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.10);
+  }
+
+  /* Scrollbar for light mode */
+  ::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.18);
+  }
+
+  /* Markdown light mode overrides */
+  .markdown-body code {
+    background: rgba(0, 0, 0, 0.07);
+  }
+  .markdown-body pre {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  .markdown-body blockquote {
+    border-left-color: rgba(0, 0, 0, 0.22);
+  }
+  .markdown-body th,
+  .markdown-body td {
+    border-color: rgba(0, 0, 0, 0.12);
+  }
+  .app-shell {
+    background:
+      linear-gradient(180deg, rgba(0, 0, 0, 0.02), transparent 34%),
+      var(--app-bg);
+  }
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--app-bg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  /* Disable double-tap-to-zoom; pinch is blocked via JS in main.jsx (iOS
+     ignores user-scalable=no). */
+  touch-action: manipulation;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  touch-action: manipulation;
+}
+
+textarea {
+  -webkit-appearance: none;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+.app-shell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 34%),
+    var(--app-bg);
+  /* Keep headers clear of the status bar / notch (viewport-fit=cover). */
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+
+/* Hide scrollbar (for horizontal tab strips etc.) */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   GLASS & GLOW DESIGN SYSTEM
+   ════════════════════════════════════════════════════════════════════════
+   Every floating control derives from this recipe:
+     1. translucent body  → the backdrop blur carries the material, not the fill
+     2. top-edge rim       → a 1px highlight where light grazes the upper edge
+     3. specular sheen     → a soft top-down gradient painted BEHIND content
+                             (z-index:-1) so text never dims
+     4. EDGE refraction    → a 1px gradient ring (::after) masked to the border,
+                             so each control's rim bends ambient light like glass.
+   Variants only adjust radius / body strength. No per-element shadow soup —
+   change a token, the whole system moves together. */
+.glass-card,
+.glass-pill,
+.glass-tab,
+.glass-input {
+  position: relative;
+  isolation: isolate;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow-sm);
+  transition: box-shadow 0.25s var(--ease-smooth),
+              border-color 0.25s var(--ease-smooth),
+              transform 0.25s var(--ease-spring);
+}
+/* Specular sheen — uniform top-down light, behind content. */
+.glass-card::before,
+.glass-pill::before,
+.glass-tab::before,
+.glass-input::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(to bottom,
+    var(--glass-sheen) 0%, rgba(255,255,255,0) 48%);
+}
+/* Refraction rim — a 1px gradient ring masked to the border.
+   Models light grazing the TOP edge of glass and fading down the body, so the
+   rim reads as a physically-lit edge rather than an arbitrary outline. The
+   actual refraction of neighbouring content is carried by backdrop-filter on
+   the body; this rim is only the specular highlight where that glass catches
+   ambient light. Top-weighted, single direction — no diagonal corner glints. */
+.glass-card::after,
+.glass-pill::after,
+.glass-tab::after,
+.glass-input::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  pointer-events: none;
+  padding: 1px;
+  background: linear-gradient(to bottom,
+    var(--glass-edge-hi) 0%,
+    var(--glass-edge-lo) 30%,
+    transparent 62%,
+    var(--glass-edge-lo) 100%);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+}
+.glass-card:hover,
+.glass-pill:hover {
+  border-color: var(--glass-border-bright);
+  transform: translateY(-1px);
+  box-shadow: var(--glass-shadow);
+}
+.glass-card:active,
+.glass-pill:active {
+  transform: translateY(0) scale(0.985);
+}
+
+.glass-card { border-radius: var(--radius-card); }
+
+/* The bottom bar carries text, so it uses the stronger body for legibility,
+   but the SAME blur level as everything above it for a consistent material. */
+.glass-tab {
+  background: var(--glass-bg-strong);
+}
+
+.glass-header {
+  background: var(--glass-bg-strong);
+  border-bottom: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+/* HIG: content layer surface — no glass, no backdrop blur */
+.surface-card {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: var(--radius-lg);
+}
+
+/* ── Unified content card (iOS26 spec) ───────────────────────────────────────
+   Use for section cards across all pages. Continuous large radius, soft border,
+   subtle depth, spring-eased interactions. */
+.ui-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  transition: border-color 0.3s var(--ease-smooth),
+              box-shadow 0.3s var(--ease-smooth),
+              transform 0.3s var(--ease-spring);
+}
+.ui-card-interactive:hover {
+  border-color: var(--glass-border-bright);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+.ui-card-interactive:active {
+  transform: scale(0.99);
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body pre,
+.markdown-body blockquote {
+  margin: 0.55rem 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.25rem;
+}
+
+.markdown-body li + li {
+  margin-top: 0.2rem;
+}
+
+.markdown-body a {
+  color: var(--accent-soft);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-body code {
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.1rem 0.28rem;
+  font-size: 0.9em;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.32);
+  padding: 0.85rem;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid rgba(255, 255, 255, 0.22);
+  color: var(--text-secondary);
+  padding-left: 0.8rem;
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border-radius: 10px;
+  font-size: 0.92em;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 0.45rem 0.55rem;
+}
+
+.markdown-user a {
+  color: white;
+}
+
+@supports (-webkit-touch-callout: none) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* ── Motion ─────────────────────────────────────────────────────────────── */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.08); }
+}
+@keyframes shimmer-sweep {
+  0%   { background-position: -160% 0; }
+  100% { background-position: 260% 0; }
+}
+@keyframes breathe {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.9; }
+}
+@keyframes pop-in {
+  0%   { opacity: 0; transform: scale(0.92); }
+  60%  { opacity: 1; transform: scale(1.012); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.animate-rise {
+  animation: rise 0.5s var(--ease-spring) both;
+}
+.animate-fade {
+  animation: fade 0.45s var(--ease-smooth) both;
+}
+.animate-pop {
+  animation: pop-in 0.4s var(--ease-spring) both;
+}
+.animate-pulse-soft {
+  animation: pulse-soft 1.8s var(--ease-smooth) infinite;
+}
+
+/* Staggered list entrance — apply to a container; children rise in sequence */
+.stagger > * {
+  animation: rise 0.5s var(--ease-spring) both;
+}
+.stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.stagger > *:nth-child(2) { animation-delay: 0.07s; }
+.stagger > *:nth-child(3) { animation-delay: 0.12s; }
+.stagger > *:nth-child(4) { animation-delay: 0.17s; }
+.stagger > *:nth-child(5) { animation-delay: 0.22s; }
+.stagger > *:nth-child(6) { animation-delay: 0.27s; }
+
+/* Skeleton shimmer bar */
+.shimmer {
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.06) 30%,
+    rgba(255, 255, 255, 0.16) 50%,
+    rgba(255, 255, 255, 0.06) 70%
+  );
+  background-size: 220% 100%;
+  animation: shimmer-sweep 1.6s linear infinite;
+}
+
+/* Inbound dot trio (used by "在来的路上" state) */
+.dot-breathe {
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-fade,
+  .animate-pop,
+  .animate-pulse-soft,
+  .stagger > *,
+  .shimmer,
+  .dot-breathe {
+    animation: none;
+  }
+}

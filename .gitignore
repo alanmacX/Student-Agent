@@ -48,3 +48,12 @@ web/backend/**/*.db
 web/frontend/node_modules/
 web/frontend/dist/
 web/frontend/.vite/
+
+# server-src (Web app source)
+server-src/.env
+server-src/**/node_modules/
+server-src/**/dist/
+server-src/**/__pycache__/
+server-src/**/*.pyc
+server-src/**/*.db
+server-src/**/*.pyc

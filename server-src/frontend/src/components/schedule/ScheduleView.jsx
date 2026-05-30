@@ -2,10 +2,13 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { PanelRight, Trash2, X, Upload, Plus, MessageSquare } from "lucide-react";
 import { useSSEStream } from "../../hooks/useSSEStream";
 import { useScheduleSessions } from "../../hooks/useScheduleSessions";
+import { apiFetch } from "../../api/client";
 import MessageBubble from "../chat/MessageBubble";
 import ChatInput from "../chat/ChatInput";
 import ScheduleSidebar from "./ScheduleSidebar";
 import ImportModal from "./ImportModal";
+
+const AUTO_NEW_SESSION_MS = 30 * 60 * 1000; // 30 minutes
 
 // ── Floating circular action button ───────────────────────────────────────────
 function CircleButton({ onClick, title, className = "", children }) {
@@ -140,10 +143,10 @@ export default function ScheduleView() {
   const [sessionsDrawerOpen, setSessionsDrawerOpen] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [agentStatus, setAgentStatus] = useState("处理中...");
-  const [pendingTool, setPendingTool] = useState(null); // { tool }
-  const pendingToolRef = useRef(null);
   const [activeSession, setActiveSession] = useState(null); // null = loading
   const messagesEndRef = useRef(null);
+  const lastActivityRef = useRef(Date.now());
+  const pendingConfirmRef = useRef(null); // persists pendingConfirmation across DB reloads
 
   const {
     sessions,
@@ -154,13 +157,13 @@ export default function ScheduleView() {
     initSession,
   } = useScheduleSessions();
 
-  // Load messages for the active session
+  // Load messages for the active session. Returns parsed array so callers can
+  // re-apply transient state (e.g. pendingConfirmation) after the DB reload.
   const loadMessages = useCallback(async (sessionId) => {
-    if (!sessionId) return;
+    if (!sessionId) return null;
     try {
       const res = await fetch(`/api/schedule/sessions/${sessionId}/messages`);
       const data = await res.json();
-      // Parse schedule_payload_json for each message
       const parsed = data.map((m) => {
         if (m.schedule_payload_json) {
           try {
@@ -208,6 +211,11 @@ export default function ScheduleView() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Update activity timestamp on new messages
+  useEffect(() => {
+    if (messages.length > 0) lastActivityRef.current = Date.now();
+  }, [messages.length]);
 
   const { startStream, stopStream, isStreaming } = useSSEStream({
     onText: (chunk) => {
@@ -272,42 +280,43 @@ export default function ScheduleView() {
         return prev;
       });
     },
-    onPendingConfirmation: (event) => {
-      const tool = event.tool;
-      pendingToolRef.current = tool;
-      setPendingTool({ tool });
+    onPendingConfirm: (event) => {
+      const pending = {
+        tool: event.tool,
+        arguments: event.arguments,
+        description: event.description,
+      };
+      pendingConfirmRef.current = pending;
+      setAgentStatus("等待确认");
       setMessages((prev) => {
-        const lastIdx = prev.findLastIndex((m) => m.role === "assistant");
+        const stopped = prev.map((m) => (m._streaming ? { ...m, _streaming: false } : m));
+        const lastIdx = stopped.findLastIndex((m) => m.role === "assistant");
         if (lastIdx !== -1) {
-          const updated = [...prev];
-          updated[lastIdx] = { ...updated[lastIdx], _pendingTool: tool };
+          const updated = [...stopped];
+          updated[lastIdx] = { ...updated[lastIdx], pendingConfirmation: pending };
           return updated;
         }
-        return prev;
+        return [...stopped, { role: "assistant", content: "", _streaming: false, pendingConfirmation: pending }];
       });
     },
     onDone: async () => {
       setMessages((prev) =>
         prev.map((m) => (m._streaming ? { ...m, _streaming: false } : m))
       );
-      // Refresh session list (title may have updated from first message)
       refreshSessions();
       if (activeSession?.id) {
-        // Await the DB reload, then re-apply pendingTool in the same update.
-        // (A fixed setTimeout raced the async reload: if the fetch took
-        //  >100ms the button was re-applied first, then overwritten by the
-        //  fresh DB messages — so it flashed and vanished.)
+        // Await the DB reload so we know when messages are replaced, then
+        // re-attach pendingConfirmation. Without await, loadMessages races
+        // against the state already set by onPendingConfirm and wipes the button.
         await loadMessages(activeSession.id);
-        const savedTool = pendingToolRef.current;
-        if (savedTool) {
+        const pending = pendingConfirmRef.current;
+        if (pending) {
           setMessages((prev) => {
             const lastIdx = prev.findLastIndex((m) => m.role === "assistant");
-            if (lastIdx !== -1) {
-              const updated = [...prev];
-              updated[lastIdx] = { ...updated[lastIdx], _pendingTool: savedTool };
-              return updated;
-            }
-            return prev;
+            if (lastIdx === -1) return prev;
+            const updated = [...prev];
+            updated[lastIdx] = { ...updated[lastIdx], pendingConfirmation: pending };
+            return updated;
           });
         }
       }
@@ -333,6 +342,7 @@ export default function ScheduleView() {
       setMessages([]);
       setSessionsDrawerOpen(false);
     }
+    return session;
   }, [createSession]);
 
   const handleDeleteSession = useCallback(async (id) => {
@@ -344,37 +354,22 @@ export default function ScheduleView() {
     }
   }, [activeSession, deleteSession]);
 
-  const handleConfirm = useCallback(async () => {
-    if (isStreaming) return;
-    const tool = pendingToolRef.current;
-    if (!tool) return;
-    pendingToolRef.current = null;
-    setPendingTool(null);
-    setMessages((prev) => [
-      ...prev.map((m) => (m._pendingTool ? { ...m, _pendingTool: undefined } : m)),
-      { role: "user", content: "确认" },
-    ]);
-    setAgentStatus("处理中...");
-    startStream("/api/schedule/chat", { message: "确认", session_id: activeSession?.id });
-  }, [isStreaming, activeSession, startStream]);
-
-  const handleCancel = useCallback(() => {
-    pendingToolRef.current = null;
-    setPendingTool(null);
-    setMessages((prev) =>
-      prev.map((m) => (m._pendingTool ? { ...m, _pendingTool: undefined } : m))
-    );
-  }, []);
-
   const handleSend = useCallback(async () => {
     if (!input.trim() || isStreaming) return;
-    // Clear pending confirmation if user sends a new message
-    if (pendingToolRef.current) {
-      pendingToolRef.current = null;
-      setPendingTool(null);
-    }
 
+    const now = Date.now();
+    const idle = now - lastActivityRef.current;
     let sessionId = activeSession?.id;
+
+    // Auto-create new session if idle > 30 min
+    if (sessionId && idle > AUTO_NEW_SESSION_MS) {
+      const session = await createSession("新对话");
+      if (session) {
+        setActiveSession(session);
+        setMessages([]);
+        sessionId = session.id;
+      }
+    }
 
     // Auto-create session if none exists
     if (!sessionId) {
@@ -384,6 +379,8 @@ export default function ScheduleView() {
       sessionId = session.id;
     }
 
+    lastActivityRef.current = now;
+
     const userMsg = { role: "user", content: input.trim() };
     setMessages((prev) => [...prev, userMsg]);
     const msgToSend = input.trim();
@@ -391,6 +388,53 @@ export default function ScheduleView() {
     setAgentStatus("处理中...");
     startStream("/api/schedule/chat", { message: msgToSend, session_id: sessionId });
   }, [input, isStreaming, activeSession, startStream, createSession]);
+
+  const handleConfirm = useCallback(async () => {
+    if (isStreaming) return;
+    pendingConfirmRef.current = null;
+    lastActivityRef.current = Date.now();
+    setMessages((prev) => [
+      ...prev.map((m) => (m.pendingConfirmation ? { ...m, pendingConfirmation: undefined } : m)),
+      { role: "user", content: "确认执行" },
+    ]);
+    setAgentStatus("执行中...");
+    try {
+      const res = await apiFetch("/api/schedule/confirm", {
+        method: "POST",
+        body: JSON.stringify({ action: "confirm", session_id: activeSession?.id }),
+      });
+      if (res.ok) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: typeof res.result === "string" ? res.result : JSON.stringify(res.result, null, 2) },
+        ]);
+        if (activeSession?.id) loadMessages(activeSession.id);
+      } else {
+        setMessages((prev) => [...prev, { role: "system", content: `执行失败: ${res.error}` }]);
+      }
+    } catch (e) {
+      setMessages((prev) => [...prev, { role: "system", content: `请求失败: ${e.message}` }]);
+    }
+    setAgentStatus("");
+  }, [isStreaming, activeSession, loadMessages]);
+
+  const handleCancel = useCallback(async () => {
+    if (isStreaming) return;
+    pendingConfirmRef.current = null;
+    lastActivityRef.current = Date.now();
+    setMessages((prev) => [
+      ...prev.map((m) => (m.pendingConfirmation ? { ...m, pendingConfirmation: undefined } : m)),
+      { role: "user", content: "取消" },
+      { role: "assistant", content: "已取消操作。" },
+    ]);
+    try {
+      await apiFetch("/api/schedule/confirm", {
+        method: "POST",
+        body: JSON.stringify({ action: "cancel", session_id: activeSession?.id }),
+      });
+    } catch (_) {}
+    setAgentStatus("");
+  }, [isStreaming, activeSession]);
 
   const handleClearSession = useCallback(async () => {
     if (!activeSession?.id) return;
@@ -486,13 +530,7 @@ export default function ScheduleView() {
           )}
           <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 md:gap-4">
             {messages.map((msg, i) => (
-              <MessageBubble
-                key={i}
-                message={msg}
-                onConfirm={msg._pendingTool ? handleConfirm : undefined}
-                onCancel={msg._pendingTool ? handleCancel : undefined}
-                pendingToolName={msg._pendingTool}
-              />
+              <MessageBubble key={i} message={msg} onConfirm={handleConfirm} onCancel={handleCancel} />
             ))}
             <div ref={messagesEndRef} />
           </div>

@@ -1,76 +1,236 @@
-# Student-Agent (ChatBot) 🚀
+# Student-Agent (ChatBot Web)
 
-> **你的 macOS 个人日程与学习智能管家**
+一个为学生设计的个人 AI 日程管家，以 Docker 自托管部署，通过浏览器或手机访问。
 
-Student-Agent 是一款专为学生设计的 macOS 原生智能应用。它不仅是一个聊天机器人，更是一个拥有多 Agent 协作架构的日程管理系统，旨在整合学习通（Chaoxing）、系统提醒事项、日历以及个人课程表，通过 AI 实现智能化的信息提取与任务规划。
-
----
-
-## ✨ 核心特性
-
-### 1. 🤖 多智能体协作架构 (Multi-Agent)
-项目采用前沿的 Agent 调度设计，各司其职：
-- **Main Agent**: 负责与用户直接交互，处理增删改查任务，提供决策支持。
-- **Memory Agent**: 后台运行，从繁杂的消息流中提取关键事实，维护长期记忆。
-- **Focus Agent**: 每日早起/开启应用时，为你总结未来 48 小时的优先级事务。
-- **Companion Agent**: 活在桌面上的“数字宠物”，通过轻量化的气泡与表情与你互动。
-
-### 2. 🎓 深度集成学习通 (Chaoxing)
-- **自动同步**: 实时抓取作业、课程变更、考试通知。
-- **智能过滤**: 自动识别垃圾信息，仅保留高价值的通知内容。
-- **OCR 支持**: 自动识别老师发送的通知图片，将其转化为可搜索、可提醒的任务。
-
-### 3. 📅 智能日程整合
-- **全渠道视图**: 统一展示系统 Reminders、Calendar、课程表以及学习通 DDL。
-- **自然语言交互**: 支持通过对话“帮我把周四的课推迟一小时”或“总结一下这周的作业”。
-- **记忆增强**: 应用会记住你的偏好和历史习惯，提供个性化的建议。
-
-### 4. 🐾 桌面伴侣 (Companion)
-- **常驻挂件**: 一个可爱的桌面宠物，实时同步你的同步状态。
-- **情绪互动**: 根据你的任务进度和时间点展示不同的状态（如：DDL 临近时的紧迫感）。
+**核心能力**：学习通作业/消息自动同步 → Memory AI 提炼 → 钉钉消息监听 → 智能日程 Agent 对话 → Web Push 通知。
 
 ---
 
-## 🛠️ 技术栈
+## 快速部署（Linux 服务器）
 
-- **语言**: Swift 6.0+ (SwiftUI)
-- **平台**: macOS 14.0+
-- **AI 驱动**: 兼容 OpenAI, Anthropic, Google Gemini 以及小米 MiMo 等多种 Provider
-- **架构**: 基于 Reducer 的状态管理 + 异步并发 (Structured Concurrency)
-- **本地存储**: UserDefaults + JSON 记忆文件系统
+### 前置要求
+
+- Docker + Docker Compose v2
+- 公网服务器（用于接收 Web Push，本地部署也可用，但推送不可用）
+- 域名（可选，HTTPS 必须，否则 PWA 推送不可用）
+
+### 1. 克隆仓库
+
+```bash
+git clone https://github.com/alanmacX/Student-Agent.git
+cd Student-Agent/server-src
+```
+
+### 2. 创建 .env
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env`：
+
+```env
+# 必填
+DATABASE_PATH=/data/chatbot.db
+
+# 用于 Memory AI 提取和日程 Agent 的 LLM（支持 OpenAI 兼容接口）
+STANDBY_AGENT_PROVIDER=openai
+STANDBY_AGENT_MODEL=gpt-4o-mini
+
+# Web Push（可选，没有则无推送通知）
+VAPID_PRIVATE_KEY=
+VAPID_PUBLIC_KEY=
+VAPID_MAILTO=mailto:you@example.com
+```
+
+VAPID 密钥生成：
+```bash
+pip install py-vapid
+python3 -c "from py_vapid import Vapid; v = Vapid(); v.generate_keys(); print('PRIVATE:', v.private_key()); print('PUBLIC:', v.public_key())"
+```
+
+### 3. 启动
+
+```bash
+docker compose up -d --build
+```
+
+服务启动后访问 `http://your-server:80`。
+
+### 4. 配置 Provider
+
+进入 **Settings → Provider**，添加你的 API Key（支持 OpenAI / Anthropic / Gemini / 任意兼容接口）。
 
 ---
 
-## 📂 项目结构
+## 学习通（Chaoxing）接入
 
-- `ChatBot/`: 核心源码
-  - `ChaoxingService.swift`: 学习通协议层集成
-  - `ChatViewModel.swift`: 核心业务逻辑与 Agent 调度
-  - `CompanionEngine.swift`: 桌面宠物行为逻辑
-  - `SKILL_SPEC.md`: Agent 技能与交互规范说明书
-- `tools/`: 开发辅助工具
+进入 **Settings → 学习通**，扫码登录。登录后每 5 分钟自动同步一次作业和消息，AI 自动提炼重要内容写入 Memory。
 
 ---
 
-## 🚀 快速开始
+## 钉钉接入（可选，较复杂）
 
-1. **克隆仓库**:
-   ```bash
-   git clone https://github.com/alanmacX/Student-Agent.git
-打开项目: 使用 Xcode 打开 ChatBot.xcodeproj。
-配置 API Key: 在应用的设置界面中，填入你的 OpenAI/Anthropic/Gemini API Key。
-登录学习通: 通过应用内的扫码功能完成身份验证。
-🛡️ 隐私说明
-Student-Agent 高度重视隐私：
+钉钉功能通过读取钉钉 Linux 客户端的本地 SQLite 数据库实现（只读，不需要开放 API）。
 
-所有的 API Key 均存储在本地 Keychain 或 UserDefaults 中，不会上传至第三方服务器（除 AI 供应商接口外）。
-学习通的 Cookie 仅用于本地与官方接口通信。
-建议在提交代码前检查 .gitignore 以确保个人课程表等数据不被泄露。
-📝 许可证
+### 前提
 
-MIT License
+服务器需要运行钉钉 Linux 桌面客户端，通过 Xvfb 虚拟显示器运行（无需真实屏幕）。
 
-### 建议操作：
-1. 在你的项目根目录创建一个 `README.md` 文件。
-2. 粘贴以上内容。
-3. 如果你有桌面宠物的截图，可以在 `## 桌面伴侣` 下方加上 `![Companion](path/to/screenshot.png)`。
+### 步骤
+
+**1. 安装依赖**
+
+```bash
+apt-get install -y xvfb x11-utils libgtk-3-0 libnss3 libxss1 libasound2
+```
+
+**2. 安装钉钉 Linux 客户端**
+
+从 [https://page.dingtalk.com/wow/dingtalk/act/download](https://page.dingtalk.com/wow/dingtalk/act/download) 下载 Linux 版，或直接：
+
+```bash
+# 阿里云服务器可用官方源
+# 下载地址以官网最新版为准
+wget -O dingtalk.deb "https://dtapp-pub.dingtalk.com/dingtalk-desktop/xc_dingtalk_update/linux_deb/Release/com.alibabainc.dingtalk_7.6.55-Release.2410312_amd64.deb"
+dpkg -i dingtalk.deb
+```
+
+**3. 首次登录（需要图形界面操作一次）**
+
+```bash
+# 启动虚拟显示器
+Xvfb :99 -screen 0 1280x800x24 &
+export DISPLAY=:99
+
+# 启动钉钉（登录后 Ctrl+C，之后用 systemd 守护）
+/opt/apps/com.alibabainc.dingtalk/files/*/com.alibabainc.dingtalk
+```
+
+用 VNC 或 noVNC 连接 `:99` 完成扫码登录。
+
+**4. 设置 systemd 守护**
+
+创建 `/etc/systemd/system/dingtalk.service`：
+
+```ini
+[Unit]
+Description=DingTalk Client (headless)
+After=network.target
+
+[Service]
+User=root
+Environment=DISPLAY=:99
+ExecStartPre=/usr/bin/Xvfb :99 -screen 0 1280x800x24
+ExecStart=/opt/apps/com.alibabainc.dingtalk/files/8.1.0-Release.6021101/com.alibabainc.dingtalk
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl daemon-reload
+systemctl enable dingtalk
+systemctl start dingtalk
+```
+
+**5. 配置 docker-compose.yml**
+
+确认钉钉数据库路径（账号目录名因账号而异）：
+```bash
+ls ~/.config/DingTalk/
+# 找类似 ec87a3f86468e8572679_v3 的目录
+```
+
+在 `docker-compose.yml` 的 backend volumes 里确认路径正确：
+```yaml
+volumes:
+  - /root/.config/DingTalk/<你的账号目录>/DBFiles:/dingtalk_db:ro
+```
+
+**6. 安装解密依赖**
+
+钉钉数据库使用 AES 加密，需要 `pycryptodome`。由于该依赖暂未写入 requirements.txt，需手动安装：
+
+```bash
+docker exec chatbot-backend-1 pip install --no-cache-dir pycryptodome
+```
+
+> **注意**：每次 `docker compose up --build` 重建镜像后，此步骤需要重做。
+> 永久解决方法：在 `backend/requirements.txt` 末尾添加 `pycryptodome`。
+
+**7. 验证**
+
+进入 **Settings → 钉钉**，点击"立即同步"，查看状态卡片。WAL 更新时间表示钉钉客户端仍在活跃写入。
+
+---
+
+## 目录结构
+
+```
+server-src/
+├── backend/              Python FastAPI 后端
+│   ├── app/
+│   │   ├── routers/      HTTP 路由层
+│   │   ├── services/     业务逻辑
+│   │   ├── memory/       统一 Memory 层（MemoryRepository + Engine）
+│   │   ├── chaoxing/     学习通 Memory 集成
+│   │   ├── dingtalk/     钉钉集成
+│   │   └── tasks/        APScheduler 定时任务
+│   ├── Dockerfile
+│   └── requirements.txt
+├── frontend/             React + Vite 前端
+│   ├── src/
+│   └── Dockerfile
+├── docker-compose.yml
+└── nginx.conf
+```
+
+详细架构说明见 [CODEBASE.md](CODEBASE.md)。
+
+---
+
+## 更新部署
+
+**前端改动**（在 `server-src/frontend/src/` 修改后）：
+```bash
+cd server-src/frontend && npm run build
+tar czf /tmp/dist.tar.gz -C dist .
+scp /tmp/dist.tar.gz your-server:/tmp/
+ssh your-server "
+  docker exec chatbot-frontend-1 sh -c 'rm -rf /usr/share/nginx/html/*'
+  docker cp /tmp/dist.tar.gz chatbot-frontend-1:/tmp/dist.tar.gz
+  docker exec chatbot-frontend-1 sh -c 'cd /usr/share/nginx/html && tar xzf /tmp/dist.tar.gz'
+"
+```
+
+**后端改动**（修改单个 py 文件后）：
+```bash
+scp server-src/backend/app/path/to/file.py your-server:/tmp/file.py
+ssh your-server "
+  docker cp /tmp/file.py chatbot-backend-1:/app/app/path/to/file.py
+  docker exec chatbot-backend-1 python3 -m py_compile /app/app/path/to/file.py
+  docker restart chatbot-backend-1
+"
+```
+
+---
+
+## 常见问题
+
+**Q: 学习通登录后没有同步数据？**
+A: 等待 5 分钟（默认 sync interval）。可在 Settings → 学习通 手动触发同步并查看状态。
+
+**Q: 钉钉显示"客户端未运行"？**
+A: 检查 dingtalk systemd 服务状态：`systemctl status dingtalk`。WAL 文件超过 5 分钟未更新说明钉钉进程已退出。
+
+**Q: 钉钉显示同步 0 条消息？**
+A: 先确认 `pycryptodome` 已安装（见上）。`docker logs chatbot-backend-1 2>&1 | grep -i crypto`。
+
+**Q: Web Push 收不到通知？**
+A: HTTPS 是必须条件。VAPID 密钥需要正确配置，且用户需在浏览器授权通知权限。
+
+**Q: 如何重置数据库？**
+A: `docker volume rm chatbot_chatbot_data` 后重启即可（会清除所有会话记录和 Memory）。
