@@ -122,7 +122,7 @@ After=network.target
 User=root
 Environment=DISPLAY=:99
 ExecStartPre=/usr/bin/Xvfb :99 -screen 0 1280x800x24
-ExecStart=/opt/apps/com.alibabainc.dingtalk/files/8.1.0-Release.6021101/com.alibabainc.dingtalk
+ExecStart=/opt/apps/com.alibabainc.dingtalk/files/<版本号>/com.alibabainc.dingtalk
 Restart=on-failure
 RestartSec=10
 
@@ -141,7 +141,7 @@ systemctl start dingtalk
 确认钉钉数据库路径（账号目录名因账号而异）：
 ```bash
 ls ~/.config/DingTalk/
-# 找类似 ec87a3f86468e8572679_v3 的目录
+# 找类似 <你的账号hash>_v3 的目录
 ```
 
 在 `docker-compose.yml` 的 backend volumes 里确认路径正确：

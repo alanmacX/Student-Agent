@@ -86,7 +86,7 @@ def _passes_keyword_filter(text: Optional[str]) -> Optional[str]:
             return "exclude"
     return None
 
-SELF_UID = os.getenv("DINGTALK_SELF_UID", "2679549222")
+SELF_UID = os.getenv("DINGTALK_SELF_UID", "")
 
 # Service / system account uids are small integers; human uids are 8-10 digits.
 SYSTEM_UID_MAX = int(os.getenv("DINGTALK_SYSTEM_UID_MAX", "10000000"))

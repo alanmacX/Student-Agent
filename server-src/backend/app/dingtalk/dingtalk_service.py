@@ -9,7 +9,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("dingtalk")
 
-KEY = b"9f6ac1b97a9021bd"
+# DingTalk's fixed AES-128-ECB key from libsync.so — same for all installations.
+# Override via env var only if DingTalk changes the key in a future version.
+KEY = os.getenv("DINGTALK_AES_KEY", "9f6ac1b97a9021bd").encode()
 
 def _discover_db_path() -> str:
     """Auto-discover the DingTalk SQLite DB by globbing the config dir.
@@ -33,8 +35,7 @@ def _discover_db_path() -> str:
     host_candidates = sorted(glob.glob(
         "/root/.config/DingTalk/*_v3/DBFiles/dingtalk.db"
     ))
-    return host_candidates[0] if host_candidates else \
-        "/root/.config/DingTalk/ec87a3f86468e8572679_v3/DBFiles/dingtalk.db"
+    return host_candidates[0] if host_candidates else ""
 
 DB_SOURCE = _discover_db_path()
 DB_WAL = os.getenv("DINGTALK_DB_WAL", DB_SOURCE + "-wal")
@@ -44,7 +45,7 @@ WAL_HDR_SIZE = 32
 FRAME_HDR_SIZE = 24
 
 # Screenshot helper service on the host (started by install.sh / systemd)
-QR_SERVICE_URL = os.getenv("DINGTALK_QR_SERVICE", "http://host.docker.internal:7777")
+QR_SERVICE_URL = os.getenv("DINGTALK_QR_SERVICE", "")
 
 
 def is_dingtalk_logged_in() -> bool:
