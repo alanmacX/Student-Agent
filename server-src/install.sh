@@ -217,12 +217,12 @@ fi
 echo ""
 info "等待服务启动..."
 MAX=30; COUNT=0
-until curl -sf "http://localhost:${PORT}/api/health" &>/dev/null || [[ $COUNT -ge $MAX ]]; do
+until curl -sf "http://localhost:${PORT}/health" &>/dev/null || [[ $COUNT -ge $MAX ]]; do
   sleep 2; COUNT=$((COUNT+1)); printf "."
 done
 echo ""
 
-if curl -sf "http://localhost:${PORT}/api/health" &>/dev/null; then
+if curl -sf "http://localhost:${PORT}/health" &>/dev/null; then
   ok "服务已就绪"
 else
   warn "服务可能还在启动，请稍候查看: $COMPOSE logs backend"
