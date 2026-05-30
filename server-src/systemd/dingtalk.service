@@ -5,11 +5,12 @@ Requires=dingtalk-xvfb.service
 
 [Service]
 Type=simple
-Environment=DISPLAY=:99
 ExecStartPre=/bin/sleep 2
-ExecStart=/bin/bash -c 'DT_DIR="$(dirname "$(ls /opt/apps/com.alibabainc.dingtalk/files/*/com.alibabainc.dingtalk | sort -V | tail -1)")"; export LD_LIBRARY_PATH="$DT_DIR"; exec "$DT_DIR/com.alibabainc.dingtalk" --no-sandbox'
+Environment=HOME=/root DISPLAY=:99
+ExecStart=/opt/chatbot/server-src/start-dingtalk.sh
 Restart=on-failure
 RestartSec=10
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
