@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response
 
-from app.dingtalk.dingtalk_service import get_conversations, is_dingtalk_logged_in, fetch_qr_screenshot
+from app.dingtalk.dingtalk_service import get_conversations, is_dingtalk_logged_in, fetch_qr_screenshot, click_qr_refresh
 from app.dingtalk.schema import ensure_schema
 from app.dingtalk.task import run_dingtalk_sync, bootstrap_to_current
 
@@ -76,6 +76,14 @@ async def qr_screenshot():
         return Response(status_code=503, content=b"QR service unavailable")
     return Response(content=data, media_type="image/png",
                     headers={"Cache-Control": "no-store"})
+
+
+@router.post("/refresh-qr")
+async def refresh_qr():
+    """Click the QR refresh button inside DingTalk window (via xdotool on host)."""
+    import json
+    result = await click_qr_refresh()
+    return Response(content=json.dumps(result).encode(), media_type="application/json")
 
 
 @router.get("/login-status")

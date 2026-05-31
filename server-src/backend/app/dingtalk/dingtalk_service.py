@@ -114,6 +114,19 @@ async def fetch_qr_screenshot() -> bytes | None:
     return None
 
 
+async def click_qr_refresh() -> dict:
+    """Ask the host-side QR service to click the refresh button in DingTalk window."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.post(f"{QR_SERVICE_URL}/refresh-qr")
+            if r.status_code == 200:
+                return r.json()
+            return {"ok": False, "error": f"HTTP {r.status_code}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def _aes_cipher():
     try:
         from Crypto.Cipher import AES

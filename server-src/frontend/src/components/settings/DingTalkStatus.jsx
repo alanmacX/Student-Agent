@@ -33,13 +33,28 @@ function QRLoginPanel({ onLoginDetected }) {
   const [imgSrc, setImgSrc] = useState(null);
   const [qrError, setQrError] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const refreshRef = useRef(null);
   const pollRef = useRef(null);
 
-  const refreshQR = useCallback(() => {
-    // Cache-bust so browser always fetches fresh screenshot
+  const fetchScreenshot = useCallback(() => {
     setImgSrc(`/api/dingtalk/qr-screenshot?t=${Date.now()}`);
   }, []);
+
+  // Click the refresh button inside DingTalk window, then fetch new screenshot
+  const refreshQR = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await apiFetch("/api/dingtalk/refresh-qr", { method: "POST" });
+      // Wait for DingTalk to render the new QR code
+      await new Promise(r => setTimeout(r, 1500));
+    } catch (_) {
+      // Even if refresh fails, try fetching the current screenshot
+    }
+    fetchScreenshot();
+    setRefreshing(false);
+  }, [refreshing, fetchScreenshot]);
 
   const checkLogin = useCallback(async () => {
     try {
@@ -54,14 +69,17 @@ function QRLoginPanel({ onLoginDetected }) {
   }, [onLoginDetected]);
 
   useEffect(() => {
+    // Initial: click refresh button to get a fresh QR, then start polling
     refreshQR();
-    refreshRef.current = setInterval(refreshQR, 3000);  // refresh screenshot every 3s
-    pollRef.current   = setInterval(checkLogin, 2500);  // poll login every 2.5s
+    // Refresh screenshot display every 3s (shows current state)
+    refreshRef.current = setInterval(fetchScreenshot, 3000);
+    // Poll login status every 2.5s
+    pollRef.current = setInterval(checkLogin, 2500);
     return () => {
       clearInterval(refreshRef.current);
       clearInterval(pollRef.current);
     };
-  }, [refreshQR, checkLogin]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loggedIn) return (
     <div className="flex flex-col items-center gap-3 py-8">
@@ -91,7 +109,10 @@ function QRLoginPanel({ onLoginDetected }) {
         ) : (
           <div className="flex flex-col items-center gap-3 py-12 text-[var(--text-tertiary)]">
             {qrError
-              ? <><AlertCircle size={28} className="text-amber-400" /><p className="text-xs">截图服务不可用<br/>请确认 dingtalk-qr.service 已启动</p></>
+              ? <><AlertCircle size={28} className="text-amber-400" /><p className="text-xs">截图服务不可用<br/>请确认 dingtalk-qr.service 已启动</p>
+                <button onClick={refreshQR} className="mt-2 rounded-lg bg-[var(--hover-bg)] px-4 py-1.5 text-xs text-white hover:bg-[var(--accent)]/20 transition">
+                  <RefreshCw size={11} className={`mr-1 inline ${refreshing ? "animate-spin" : ""}`} />重试
+                </button></>
               : <><Loader2 size={24} className="animate-spin" /><p className="text-xs">加载截图…</p></>
             }
           </div>
@@ -103,9 +124,9 @@ function QRLoginPanel({ onLoginDetected }) {
         </div>
       </div>
 
-      <button onClick={refreshQR}
-        className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--hover-bg)] py-2.5 text-xs text-[var(--text-secondary)] hover:text-white transition-colors">
-        <RefreshCw size={12} /> 手动刷新截图
+      <button onClick={refreshQR} disabled={refreshing}
+        className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--hover-bg)] py-2.5 text-xs text-[var(--text-secondary)] hover:text-white transition-colors disabled:opacity-50">
+        <RefreshCw size={12} className={refreshing ? "animate-spin" : ""} /> {refreshing ? "刷新中…" : "刷新二维码"}
       </button>
     </div>
   );
