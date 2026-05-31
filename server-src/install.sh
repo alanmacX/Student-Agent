@@ -169,17 +169,17 @@ if [[ "${SETUP_DT,,}" == "y" ]]; then
 
     # Try cached .deb first
     if [[ ! -f "$DT_DEB" ]]; then
-      DT_URL="https://dtapp-pub.dingtalk.com/dingtalk-desktop/xc_dingtalk_update/linux_deb/Release/com.alibabainc.dingtalk_7.6.55-Release.2410312_amd64.deb"
-      DT_FALLBACK="https://github.com/alanmacX/Student-Agent/releases/latest/download/dingtalk-linux-amd64.deb"
-      info "下载钉钉 Linux 客户端..."
+      DT_GITHUB="https://github.com/alanmacX/Student-Agent/releases/latest/download/dingtalk-linux-amd64.deb"
+      DT_OFFICIAL="https://dtapp-pub.dingtalk.com/dingtalk-desktop/xc_dingtalk_update/linux_deb/Release/com.alibabainc.dingtalk_7.6.55-Release.2410312_amd64.deb"
+      info "下载钉钉 Linux 客户端 (v7.6.55)..."
       if command -v wget &>/dev/null; then
-        wget -q --show-progress -O "$DT_DEB" "$DT_URL" 2>/dev/null || \
-          { warn "官方链接失败，尝试 GitHub 备用链接..."; wget -q --show-progress -O "$DT_DEB" "$DT_FALLBACK"; }
+        wget -q --show-progress -O "$DT_DEB" "$DT_GITHUB" 2>/dev/null || \
+          { warn "GitHub 链接失败，尝试官方备用链接..."; wget -q --show-progress -O "$DT_DEB" "$DT_OFFICIAL"; }
       else
-        curl -fL -o "$DT_DEB" "$DT_URL" 2>/dev/null || \
-          { warn "官方链接失败，尝试 GitHub 备用链接..."; curl -fL -o "$DT_DEB" "$DT_FALLBACK"; }
+        curl -fL -o "$DT_DEB" "$DT_GITHUB" 2>/dev/null || \
+          { warn "GitHub 链接失败，尝试官方备用链接..."; curl -fL -o "$DT_DEB" "$DT_OFFICIAL"; }
       fi
-      [[ -f "$DT_DEB" ]] || { warn "下载失败，请手动安装钉钉"; }
+      [[ -s "$DT_DEB" ]] || { warn "下载失败，请手动安装钉钉"; rm -f "$DT_DEB"; }
     else
       ok "使用缓存的安装包: $DT_DEB"
     fi

@@ -26,6 +26,8 @@
 - Docker + Docker Compose v2
 - 一个 LLM API Key（支持 OpenAI / Anthropic / Gemini / MiMo 或任何 OpenAI 兼容 API）
 
+> 不需要 Node.js 或 Python — 预构建镜像从 GitHub Container Registry (ghcr.io) 直接拉取。
+
 ### 一键安装
 
 ```bash
@@ -40,9 +42,11 @@ chmod +x install.sh
 1. 检测 Docker 环境，配置国内镜像加速
 2. 交互式创建 `.env` 配置文件（LLM 提供商、模型选择）
 3. 可选生成 VAPID 密钥对（用于 Web Push 通知）
-4. 可选安装钉钉桌面客户端 + Xvfb 虚拟显示（`--no-dingtalk` 跳过）
-5. 构建并启动三个 Docker 容器
-6. 等待健康检查通过，输出访问地址
+4. **从 ghcr.io 拉取预构建镜像**（约 30 秒，无需本地构建）
+5. 可选安装钉钉桌面客户端 + Xvfb 虚拟显示（`--no-dingtalk` 跳过，钉钉安装包从 GitHub Releases 下载）
+6. 启动容器，等待健康检查通过
+
+安装完成后输出访问地址，后续在浏览器中打开即可使用。
 
 ### 手动部署
 
@@ -51,13 +55,16 @@ chmod +x install.sh
 cp .env.example .env
 vim .env
 
-# 2. 构建并启动
-docker compose up -d --build
+# 2. 拉取预构建镜像并启动（首次约 30 秒）
+docker compose pull --ignore-buildable
+docker compose up -d
 
 # 3. 验证
 curl http://localhost/health
 # => {"status":"ok","chaoxing_logged_in":false}
 ```
+
+如果 ghcr.io 不可达（如国内无代理），`docker compose up -d` 会自动从源码构建（需要 2-5 分钟）。
 
 ### 升级
 
@@ -65,6 +72,8 @@ curl http://localhost/health
 chmod +x upgrade.sh
 ./upgrade.sh
 ```
+
+升级流程：拉取最新代码 → 从 ghcr.io 拉取新镜像 → 滚动重启。通常 30 秒内完成。
 
 ---
 
