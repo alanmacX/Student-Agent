@@ -48,14 +48,23 @@ FRAME_HDR_SIZE = 24
 QR_SERVICE_URL = os.getenv("DINGTALK_QR_SERVICE", "")
 
 
+# ── Login-status TTL cache (avoids decrypting DB every 2.5s) ─────────────────
+_login_cache: dict = {"value": None, "ts": 0}
+_LOGIN_CACHE_TTL = 15  # seconds
+
+
 def is_dingtalk_logged_in() -> bool:
     """True when a DingTalk account DB exists and has user profile data.
 
     Globs for the account-scoped *_v3 directory under the config mount,
     then decrypts the DB and checks tbuser_profile_v2.
-    Note: the encrypted DB file itself may be tiny (4 KB) when all data is
-    in the WAL — don't use file size as a proxy for login state.
+    Results are cached for 15 seconds to avoid re-decrypting on every poll.
     """
+    import time
+    now = time.time()
+    if now - _login_cache["ts"] < _LOGIN_CACHE_TTL and _login_cache["value"] is not None:
+        return _login_cache["value"]
+
     import glob
     cfg_dir = os.getenv("DINGTALK_DB_SOURCE", "/dingtalk_cfg").rstrip("/")
     if cfg_dir.endswith(".db"):
@@ -65,10 +74,14 @@ def is_dingtalk_logged_in() -> bool:
     if not account_dirs:
         account_dirs = glob.glob("/root/.config/DingTalk/*_v3")
     if not account_dirs:
+        _login_cache["value"] = False
+        _login_cache["ts"] = now
         return False
 
     db = Path(account_dirs[0]) / "DBFiles" / "dingtalk.db"
     if not db.exists():
+        _login_cache["value"] = False
+        _login_cache["ts"] = now
         return False
 
     try:
@@ -76,9 +89,13 @@ def is_dingtalk_logged_in() -> bool:
         conn = sqlite3.connect(decrypted)
         count = conn.execute("SELECT COUNT(*) FROM tbuser_profile_v2").fetchone()[0]
         conn.close()
-        return count > 0
+        result = count > 0
     except Exception:
-        return False
+        result = False
+
+    _login_cache["value"] = result
+    _login_cache["ts"] = now
+    return result
 
 
 async def fetch_qr_screenshot() -> bytes | None:

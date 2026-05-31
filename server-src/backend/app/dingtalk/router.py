@@ -67,11 +67,10 @@ async def get_interest(
 async def qr_screenshot():
     """Return a PNG screenshot of the DingTalk window (for QR-code login flow).
 
-    Returns 204 when DingTalk is already logged in (no need to show QR).
     Returns 503 when the screenshot helper is unreachable.
+    Login-state check is handled by the frontend via /login-status poll,
+    so this endpoint always tries to return a fresh screenshot.
     """
-    if is_dingtalk_logged_in():
-        return Response(status_code=204)
     data = await fetch_qr_screenshot()
     if data is None:
         return Response(status_code=503, content=b"QR service unavailable")
