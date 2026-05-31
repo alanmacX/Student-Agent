@@ -76,11 +76,11 @@ async def health_detail():
     result["chaoxing"] = {"logged_in": getattr(app.state.chaoxing_svc, "is_logged_in", False)}
     # MaiMBot
     try:
-        from app.tasks.maimbot_health import _docker_running, _check_napcat
+        from app.tasks.maimbot_health import _is_running, _check_napcat
         result["maimbot"] = {
-            "core_running": _docker_running("maim-bot-core"),
-            "napcat_running": _docker_running("maim-bot-napcat"),
-            "napcat_alive": _check_napcat(),
+            "core_running": await _is_running("maim-bot-core"),
+            "napcat_running": await _is_running("maim-bot-napcat"),
+            "napcat_alive": await _check_napcat(),
         }
     except Exception:
         result["maimbot"] = {"status": "unknown"}

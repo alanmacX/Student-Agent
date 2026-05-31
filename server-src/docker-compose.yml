@@ -22,6 +22,9 @@ services:
       - /opt/maibot/data:/maimbot_data:ro
     expose:
       - "8000"
+    networks:
+      - default
+      - maimbot
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5).read()"]
       interval: 30s
@@ -51,3 +54,8 @@ services:
 
 volumes:
   chatbot_data:
+
+networks:
+  maimbot:
+    external: true
+    name: maibot_maim_bot
