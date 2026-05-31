@@ -170,11 +170,16 @@ if [[ "${SETUP_DT,,}" == "y" ]]; then
     # Try cached .deb first
     if [[ ! -f "$DT_DEB" ]]; then
       DT_URL="https://dtapp-pub.dingtalk.com/dingtalk-desktop/xc_dingtalk_update/linux_deb/Release/com.alibabainc.dingtalk_7.6.55-Release.2410312_amd64.deb"
+      DT_FALLBACK="https://github.com/alanmacX/Student-Agent/releases/latest/download/dingtalk-linux-amd64.deb"
+      info "下载钉钉 Linux 客户端..."
       if command -v wget &>/dev/null; then
-        wget -q --show-progress -O "$DT_DEB" "$DT_URL" || { warn "下载失败，请手动安装钉钉"; }
+        wget -q --show-progress -O "$DT_DEB" "$DT_URL" 2>/dev/null || \
+          { warn "官方链接失败，尝试 GitHub 备用链接..."; wget -q --show-progress -O "$DT_DEB" "$DT_FALLBACK"; }
       else
-        curl -fL -o "$DT_DEB" "$DT_URL" || { warn "下载失败，请手动安装钉钉"; }
+        curl -fL -o "$DT_DEB" "$DT_URL" 2>/dev/null || \
+          { warn "官方链接失败，尝试 GitHub 备用链接..."; curl -fL -o "$DT_DEB" "$DT_FALLBACK"; }
       fi
+      [[ -f "$DT_DEB" ]] || { warn "下载失败，请手动安装钉钉"; }
     else
       ok "使用缓存的安装包: $DT_DEB"
     fi
@@ -272,8 +277,9 @@ fi
 echo ""
 info "构建并启动容器..."
 
-# Try pull first (fast path if pre-built images exist), fall back to build
-if $COMPOSE pull backend frontend 2>/dev/null; then
+# Try pull from ghcr.io first (fast path), fall back to local build
+info "拉取预构建镜像..."
+if $COMPOSE pull --ignore-buildable 2>/dev/null; then
   ok "已拉取预构建镜像"
   $COMPOSE up -d
 else

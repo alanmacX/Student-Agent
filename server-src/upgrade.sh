@@ -41,8 +41,8 @@ fi
 # ── Rebuild / pull images ────────────────────────────────────────────────────
 if [[ "$SKIP_BUILD" == "false" ]]; then
   info "更新镜像..."
-  # Try pull first (pre-built images), fall back to build
-  if $COMPOSE pull backend frontend 2>/dev/null; then
+  # Try pull from ghcr.io first, fall back to local build
+  if $COMPOSE pull --ignore-buildable 2>/dev/null; then
     ok "已拉取最新镜像"
   else
     info "从源码重新构建..."
