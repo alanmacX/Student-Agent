@@ -71,7 +71,7 @@ export default function DailyPopup() {
         )}
         <button
           onClick={dismiss}
-          className="mt-5 w-full rounded-2xl bg-[var(--accent)] py-3 text-[15px] font-semibold text-white shadow-lg shadow-[var(--accent)]/30 transition active:scale-[0.98]"
+          className="mt-5 w-full rounded-2xl bg-[var(--accent)] py-3 text-[15px] font-semibold text-white shadow-lg transition active:scale-[0.98]"
         >
           知道了
         </button>

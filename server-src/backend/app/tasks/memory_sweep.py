@@ -2,6 +2,8 @@
 Memory sweep task — runs hourly via APScheduler.
 Uses MemoryRepository.sweep() to delete expired entries and cap active count.
 """
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
 

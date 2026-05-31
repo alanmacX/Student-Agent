@@ -34,10 +34,10 @@ async def run_migrations(db_path: str):
             INSERT OR IGNORE INTO schedule_sessions (id, title, created_at, updated_at)
             VALUES ('default', '默认对话', datetime('now'), datetime('now'))
         """)
-        # Pre-seed Mimo provider (idempotent)
+        # Pre-seed Mimo provider (idempotent) — must match BUILTIN_PROVIDERS in provider_registry.py
         await db.execute("""
             INSERT OR IGNORE INTO custom_providers (id, data_json)
-            VALUES ('xiaomimimo', '{"id":"xiaomimimo","name":"小米 MiMo","base_url":"https://token-plan-sgp.xiaomimimo.com","api_type":"openAI","models":["mimo-v2.5-pro"],"api_key":""}')
+            VALUES ('xiaomimimo', '{"id":"xiaomimimo","name":"小米 MiMo","base_url":"https://token-plan-sgp.xiaomimimo.com/v1","api_type":"xiaomiMimo","models":["mimo-v2.5-pro"],"api_key":"","icon_name":"m-circle","color_hex":"FF6900"}')
         """)
         await db.commit()
 
@@ -275,6 +275,13 @@ _SCHEMA = """
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         UNIQUE(key)
+    );
+
+    CREATE TABLE IF NOT EXISTS model_pricing (
+        model       TEXT PRIMARY KEY,
+        input_rate  REAL NOT NULL,
+        output_rate REAL NOT NULL,
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
 """
 

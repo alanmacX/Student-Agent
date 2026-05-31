@@ -36,10 +36,6 @@
   --glass-border: rgba(255, 255, 255, 0.14);
   --glass-border-bright: rgba(255, 255, 255, 0.30);
   --glass-blur: blur(3px) saturate(145%);      /* barely-there frost — content reads clearly behind */
-  --glass-rim: rgba(255, 255, 255, 0.32);      /* top-edge light catch (inset) */
-  --glass-edge-hi: rgba(255, 255, 255, 0.52);  /* refraction rim — top, where light grazes */
-  --glass-edge-lo: rgba(255, 255, 255, 0.12);  /* refraction rim — fades down the body */
-  --glass-sheen: rgba(255, 255, 255, 0.10);    /* specular sheen behind content */
   --glass-shadow: 0 10px 36px rgba(0, 0, 0, 0.46);
   --glass-shadow-sm: 0 3px 16px rgba(0, 0, 0, 0.34);
 
@@ -90,10 +86,6 @@
     --glass-bg-strong: rgba(255, 255, 255, 0.55);
     --glass-border: rgba(0, 0, 0, 0.08);
     --glass-border-bright: rgba(0, 0, 0, 0.16);
-    --glass-rim: rgba(255, 255, 255, 0.90);
-    --glass-edge-hi: rgba(255, 255, 255, 0.95);
-    --glass-edge-lo: rgba(255, 255, 255, 0.40);
-    --glass-sheen: rgba(255, 255, 255, 0.50);
     --glass-shadow: 0 10px 36px rgba(0, 0, 0, 0.14);
     --glass-shadow-sm: 0 3px 16px rgba(0, 0, 0, 0.09);
   }
@@ -207,17 +199,9 @@ textarea {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   GLASS & GLOW DESIGN SYSTEM
+   GLASS DESIGN SYSTEM
    ════════════════════════════════════════════════════════════════════════
-   Every floating control derives from this recipe:
-     1. translucent body  → the backdrop blur carries the material, not the fill
-     2. top-edge rim       → a 1px highlight where light grazes the upper edge
-     3. specular sheen     → a soft top-down gradient painted BEHIND content
-                             (z-index:-1) so text never dims
-     4. EDGE refraction    → a 1px gradient ring (::after) masked to the border,
-                             so each control's rim bends ambient light like glass.
-   Variants only adjust radius / body strength. No per-element shadow soup —
-   change a token, the whole system moves together. */
+   Translucent body + backdrop blur + subtle shadow. Clean, no edge effects. */
 .glass-card,
 .glass-pill,
 .glass-tab,
@@ -232,48 +216,6 @@ textarea {
   transition: box-shadow 0.25s var(--ease-smooth),
               border-color 0.25s var(--ease-smooth),
               transform 0.25s var(--ease-spring);
-}
-/* Specular sheen — uniform top-down light, behind content. */
-.glass-card::before,
-.glass-pill::before,
-.glass-tab::before,
-.glass-input::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
-  pointer-events: none;
-  background: linear-gradient(to bottom,
-    var(--glass-sheen) 0%, rgba(255,255,255,0) 48%);
-}
-/* Refraction rim — a 1px gradient ring masked to the border.
-   Models light grazing the TOP edge of glass and fading down the body, so the
-   rim reads as a physically-lit edge rather than an arbitrary outline. The
-   actual refraction of neighbouring content is carried by backdrop-filter on
-   the body; this rim is only the specular highlight where that glass catches
-   ambient light. Top-weighted, single direction — no diagonal corner glints. */
-.glass-card::after,
-.glass-pill::after,
-.glass-tab::after,
-.glass-input::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  border-radius: inherit;
-  pointer-events: none;
-  padding: 1px;
-  background: linear-gradient(to bottom,
-    var(--glass-edge-hi) 0%,
-    var(--glass-edge-lo) 30%,
-    transparent 62%,
-    var(--glass-edge-lo) 100%);
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
 }
 .glass-card:hover,
 .glass-pill:hover {
@@ -315,14 +257,14 @@ textarea {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
   transition: border-color 0.3s var(--ease-smooth),
               box-shadow 0.3s var(--ease-smooth),
               transform 0.3s var(--ease-spring);
 }
 .ui-card-interactive:hover {
   border-color: var(--glass-border-bright);
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22);
 }
 .ui-card-interactive:active {
   transform: scale(0.99);

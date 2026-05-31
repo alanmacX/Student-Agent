@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 import json
@@ -234,11 +236,11 @@ async def stream_chat(conv_id: str, request: Request):
                         yield f"data: {json.dumps({'type': 'reasoning', 'content': event.content})}\n\n"
                     elif event.type == "usage":
                         usage_data = event.usage
-                        yield f"data: {json.dumps({'type': 'usage', 'usage': _usage_to_dict(event.usage)})}\n\n"
+                        yield f"data: {json.dumps({'type': 'usage', 'usage': _usage_to_dict(event.usage, model=model, provider=provider_id)})}\n\n"
 
             # Save assistant message
             assistant_msg_id = str(uuid.uuid4())
-            usage_json = json.dumps(_usage_to_dict(usage_data)) if usage_data else None
+            usage_json = json.dumps(_usage_to_dict(usage_data, model=model, provider=provider_id)) if usage_data else None
             async with db_conn() as db:
                 await db.execute(
                     "INSERT INTO messages (id, conversation_id, role, content, usage_json, timestamp, position) VALUES (?,?,?,?,?,?,?)",
@@ -268,13 +270,18 @@ async def stream_chat(conv_id: str, request: Request):
     )
 
 
-def _usage_to_dict(u) -> dict:
+def _usage_to_dict(u, model: str = "", provider: str = "") -> dict:
     if not u:
         return {}
-    return {
+    d = {
         "input_tokens": u.input_tokens,
         "output_tokens": u.output_tokens,
         "cache_hit_tokens": u.cache_hit_tokens,
         "cache_miss_tokens": u.cache_miss_tokens,
         "reasoning_tokens": u.reasoning_tokens,
     }
+    if model:
+        d["model"] = model
+    if provider:
+        d["provider"] = provider
+    return d

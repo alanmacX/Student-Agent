@@ -23,6 +23,8 @@ Final routing buckets (the ``verdict`` field):
     drop     -> ignore (pure noise, non-CS activities/recruitment)
     needs_llm-> placeholder until classifier runs
 """
+from __future__ import annotations
+
 import json
 import os
 import re

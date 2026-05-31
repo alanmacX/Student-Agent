@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +19,11 @@ async def lifespan(app: FastAPI):
     await chaoxing_svc.init()
     app.state.chaoxing_svc = chaoxing_svc
     app.state.settings = settings
+
+    # Pre-warm model pricing cache from OpenRouter
+    from app.services.pricing_service import fetch_openrouter_pricing
+    import asyncio
+    asyncio.create_task(fetch_openrouter_pricing())
 
     init_scheduler(app.state)
 

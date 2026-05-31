@@ -1,6 +1,8 @@
 """
 Adaptive Chaoxing sync probe.
 """
+from __future__ import annotations
+
 
 import logging
 from apscheduler.triggers.date import DateTrigger

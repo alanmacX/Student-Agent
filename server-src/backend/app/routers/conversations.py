@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fastapi import APIRouter
 from app.models import ConversationCreate, ConversationUpdate
 from app.database import db_conn

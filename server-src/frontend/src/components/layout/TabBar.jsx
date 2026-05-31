@@ -56,7 +56,7 @@ export default function TabBar({ active, onChange, onRefresh }) {
               style={{ transition: "all 0.42s var(--ease-spring)", position: "relative", zIndex: 1 }}
               className={`flex items-center gap-1.5 rounded-full px-3.5 py-2.5 text-[13px] font-semibold ${
                 isActive
-                  ? "bg-[var(--accent)] text-white shadow-lg shadow-[var(--accent)]/40 scale-[1.03]"
+                  ? "bg-[var(--accent)] text-white shadow-lg scale-[1.03]"
                   : "text-[var(--text-tertiary)] hover:text-white hover:bg-[var(--hover-bg)] active:scale-95"
               }`}
             >

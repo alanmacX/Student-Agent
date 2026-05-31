@@ -1,5 +1,7 @@
 """Web Push notification sender via pywebpush."""
 
+from __future__ import annotations
+
 import json
 from pywebpush import webpush, WebPushException
 from app.config import settings

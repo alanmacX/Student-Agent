@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fastapi import APIRouter, Request
 from app.database import db_conn
 from app.models import CustomProviderCreate

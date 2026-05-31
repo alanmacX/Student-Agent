@@ -275,9 +275,10 @@ async def run_agentic_loop(
         response = await agent_complete(current_messages, tools, provider, model, api_key, thinking_budget)
 
         if response.usage:
-            usage_dict = _usage_to_dict(response.usage)
+            provider_id = provider.get("id", "")
+            usage_dict = _usage_to_dict(response.usage, model=model, provider=provider_id)
             from .api_service import estimate_cost
-            cost = estimate_cost(model, response.usage.input_tokens, response.usage.output_tokens)
+            cost = await estimate_cost(model, response.usage.input_tokens, response.usage.output_tokens, provider_id)
             if cost is not None:
                 usage_dict["estimated_cost_usd"] = round(cost, 6)
             yield {"type": "usage", "usage": usage_dict}
@@ -344,14 +345,19 @@ def is_bare_completion(text: str) -> bool:
     return normalized in {"完成", "done", "ok", "好的", "已完成"}
 
 
-def _usage_to_dict(u) -> dict:
-    return {
+def _usage_to_dict(u, model: str = "", provider: str = "") -> dict:
+    d = {
         "input_tokens": u.input_tokens,
         "output_tokens": u.output_tokens,
         "cache_hit_tokens": u.cache_hit_tokens,
         "cache_miss_tokens": u.cache_miss_tokens,
         "reasoning_tokens": u.reasoning_tokens,
     }
+    if model:
+        d["model"] = model
+    if provider:
+        d["provider"] = provider
+    return d
 
 
 def filter_relevant_tools(tools: list[ToolDefinition], user_message: str, always_include: set[str] = frozenset()) -> list[ToolDefinition]:

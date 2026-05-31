@@ -59,14 +59,56 @@ KNOWN_PRICING: dict[str, tuple[float, float]] = {
 }
 
 
-def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float | None:
-    """Estimate cost in USD for a given model and token counts."""
+def _match_known_pricing(model: str) -> tuple[float, float] | None:
     pricing = KNOWN_PRICING.get(model)
+    if pricing:
+        return pricing
+    for known, prices in KNOWN_PRICING.items():
+        if model.startswith(known) or known.startswith(model):
+            return prices
+    return None
+
+
+def _match_openrouter_pricing(model: str, provider: str, or_pricing: dict) -> tuple[float, float] | None:
+    """Try to match model against OpenRouter pricing dict."""
+    if model in or_pricing:
+        return or_pricing[model]
+    if provider:
+        full = f"{provider}/{model}"
+        if full in or_pricing:
+            return or_pricing[full]
+    # Fuzzy: model name contains or is contained by an OpenRouter key
+    for key, prices in or_pricing.items():
+        short = key.split("/")[-1] if "/" in key else key
+        if model.startswith(short) or short.startswith(model):
+            return prices
+    return None
+
+
+async def estimate_cost(model: str, input_tokens: int, output_tokens: int, provider: str = "") -> float | None:
+    """Estimate cost in USD. Tries: 1) user override, 2) OpenRouter, 3) KNOWN_PRICING."""
+    from .pricing_service import fetch_openrouter_pricing
+    from app.database import db_conn
+
+    # 1. User override in DB
+    try:
+        async with db_conn() as db:
+            row = await (await db.execute(
+                "SELECT input_rate, output_rate FROM model_pricing WHERE model=?", (model,)
+            )).fetchone()
+        if row:
+            return (input_tokens * row["input_rate"] + output_tokens * row["output_rate"]) / 1_000_000
+    except Exception:
+        pass
+
+    # 2. OpenRouter pricing (fuzzy match)
+    or_pricing = await fetch_openrouter_pricing()
+    pricing = _match_openrouter_pricing(model, provider, or_pricing)
+
+    # 3. KNOWN_PRICING fallback
     if not pricing:
-        for known_model, prices in KNOWN_PRICING.items():
-            if model.startswith(known_model) or known_model.startswith(model):
-                pricing = prices
-                break
+        pricing = _match_known_pricing(model)
+
     if not pricing:
         return None
     input_rate, output_rate = pricing

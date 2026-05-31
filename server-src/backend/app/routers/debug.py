@@ -11,6 +11,8 @@ Usage:
   curl http://localhost:8080/api/debug/scheduler
   curl -X POST http://localhost:8080/api/debug/standby
 """
+from __future__ import annotations
+
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse

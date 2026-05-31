@@ -193,12 +193,12 @@ function TodayCard({ data, loading, pendingCount, onRefreshBriefing, refreshingB
           <button
             onClick={onRefreshBriefing}
             disabled={refreshingBriefing || generating}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-[14px] bg-white/10 text-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.28),inset_0_0_0_0.5px_rgba(255,255,255,0.12)] backdrop-blur-md transition-all hover:bg-white/20 hover:text-white active:scale-90 disabled:opacity-40"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-[14px] bg-white/10 text-white/70 backdrop-blur-md transition-all hover:bg-white/20 hover:text-white active:scale-90 disabled:opacity-40"
             aria-label="重新生成摘要"
           >
             <RefreshCw size={14} className={refreshingBriefing ? "animate-spin" : ""} />
           </button>
-          <div className="grid h-11 w-11 shrink-0 place-items-center rounded-[18px] bg-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),inset_0_0_0_0.5px_rgba(255,255,255,0.15)] backdrop-blur-md">
+          <div className="grid h-11 w-11 shrink-0 place-items-center rounded-[18px] bg-white/15 backdrop-blur-md">
             <Sparkles size={21} className={`text-white ${generating ? "animate-pulse-soft" : ""}`} />
           </div>
         </div>
@@ -241,9 +241,9 @@ function TodayCard({ data, loading, pendingCount, onRefreshBriefing, refreshingB
 }
 
 const URGENCY = {
-  high: { dot: "bg-orange-400", ring: "ring-orange-400/30", glow: "shadow-[0_0_0_3px_rgba(251,146,60,0.12)]" },
-  medium: { dot: "bg-[var(--accent-soft)]", ring: "ring-[var(--accent)]/25", glow: "" },
-  low: { dot: "bg-white/40", ring: "ring-white/10", glow: "" },
+  high: { dot: "bg-orange-400", ring: "ring-orange-400/30" },
+  medium: { dot: "bg-[var(--accent-soft)]", ring: "ring-[var(--accent)]/25" },
+  low: { dot: "bg-white/40", ring: "ring-white/10" },
 };
 
 function TodoRow({ todo, delay }) {
@@ -255,7 +255,7 @@ function TodoRow({ todo, delay }) {
     <button
       type="button"
       onClick={() => hasDetail && setOpen((v) => !v)}
-      className={`animate-rise group flex w-full items-start gap-3 rounded-[20px] bg-white/[0.05] px-4 py-3 text-left ring-1 ${u.ring} ${u.glow} transition-all duration-200 ease-[var(--ease-spring)] hover:bg-white/[0.09] active:scale-[0.985]`}
+      className={`animate-rise group flex w-full items-start gap-3 rounded-[20px] bg-white/[0.05] px-4 py-3 text-left ring-1 ${u.ring} transition-all duration-200 ease-[var(--ease-spring)] hover:bg-white/[0.09] active:scale-[0.985]`}
       style={{ animationDelay: `${delay}ms` }}
     >
       <span className="mt-[7px] flex shrink-0">
