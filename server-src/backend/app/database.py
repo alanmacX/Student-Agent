@@ -392,4 +392,21 @@ _COLUMN_MIGRATIONS: list[str] = [
         updated_at                  TEXT
     )""",
     "INSERT OR IGNORE INTO dingtalk_filter_config (id) VALUES (1)",
+
+    # ── MaiMBot health monitoring ─────────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS maimbot_health_log (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        core_running    INTEGER DEFAULT 0,
+        napcat_running  INTEGER DEFAULT 0,
+        napcat_alive    INTEGER DEFAULT 0,
+        core_cpu        REAL DEFAULT 0,
+        core_ram_mb     REAL DEFAULT 0,
+        napcat_cpu      REAL DEFAULT 0,
+        napcat_ram_mb   REAL DEFAULT 0,
+        error           TEXT DEFAULT '',
+        checked_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_maimbot_health_checked ON maimbot_health_log(checked_at DESC)",
+    # Default: maimbot monitoring disabled
+    "INSERT OR IGNORE INTO settings (key, value) VALUES ('maimbot_enabled', '0')",
 ]

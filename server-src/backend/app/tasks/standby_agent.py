@@ -49,7 +49,16 @@ async def _compute_context_hash(db_path: str) -> str:
         health_sig = f"{int(psutil.cpu_percent(interval=0))}:{int(psutil.virtual_memory().percent)}:{int(psutil.disk_usage('/').percent)}"
     except Exception:
         health_sig = "na"
-    raw = f"{r1[0]}|{r2[0]}|{r3[0]}|{health_sig}"
+    # MaiMBot health
+    try:
+        r4 = await (await db.execute(
+            "SELECT MAX(checked_at) FROM maimbot_health_log"
+        )).fetchone()
+        maimbot_sig = r4[0] if r4 and r4[0] else "na"
+    except Exception:
+        maimbot_sig = "na"
+
+    raw = f"{r1[0]}|{r2[0]}|{r3[0]}|{health_sig}|{maimbot_sig}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 STANDBY_TOOLS = [
@@ -109,8 +118,9 @@ def _build_system_prompt(now: datetime) -> str:
 2. 截止时间在 24 小时内且尚未推送过 → 推送（普通优先级）
 3. 有未处理的高重要度学习通消息（action_hint 非空）→ 考虑推送
 4. 系统指标异常（CPU>90%、RAM>85%、磁盘>90%）且最近 30 分钟内未告警 → 推送（高优先级），item_id 用 health_alert_{metric}_{时间}
-5. 以上都没有 → 调用 no_action
-6. 已经推送过的条目（已在通知记录中）→ no_action，不要重复打扰
+5. MaiMBot 容器异常（core/napcat 不运行或 NapCat API 不可达）且最近 30 分钟内未告警 → 推送（高优先级），item_id 用 maimbot_alert_{时间}
+6. 以上都没有 → 调用 no_action
+7. 已经推送过的条目（已在通知记录中）→ no_action，不要重复打扰
 
 你只能发送一条通知，选最重要的一件事。绝对不要发送多条。
 不要向用户解释你在做什么——直接调用工具。""".strip()
@@ -218,6 +228,21 @@ async def _build_context(db_path: str, now: datetime) -> str:
         for r in user_mem_rows:
             r = dict(r)
             lines.append(f"  - {r['key']}: {r['value']}")
+
+    # MaiMBot health
+    try:
+        async with aiosqlite.connect(db_path) as _db3:
+            _db3.row_factory = aiosqlite.Row
+            mb_row = await (await _db3.execute(
+                "SELECT * FROM maimbot_health_log ORDER BY checked_at DESC LIMIT 1"
+            )).fetchone()
+        if mb_row:
+            mb = dict(mb_row)
+            ok = mb["core_running"] and mb["napcat_running"] and mb["napcat_alive"]
+            status = "正常" if ok else f"异常: {mb['error']}"
+            lines.append(f"【MaiMBot】{status} | core {mb['core_ram_mb']:.0f}MB | napcat {mb['napcat_ram_mb']:.0f}MB")
+    except Exception:
+        pass
 
     return "\n".join(lines)
 

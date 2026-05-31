@@ -16,6 +16,10 @@ services:
       # Mount the *entire* DingTalk config dir so we can glob for the account-
       # scoped *_v3 subdirectory without hardcoding the user ID.
       - /root/.config/DingTalk:/dingtalk_cfg:ro
+      # Docker socket for MaiMBot health monitoring
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # MaiMBot data directory for config reading
+      - /opt/maibot/data:/maimbot_data:ro
     expose:
       - "8000"
     healthcheck:
