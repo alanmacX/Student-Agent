@@ -138,15 +138,15 @@ if [[ "${SETUP_DT,,}" == "y" ]]; then
   info "配置钉钉监听..."
 
   # ── 1. 依赖 ──────────────────────────────────────────────────────────────
-  info "安装系统依赖 (Xvfb, ImageMagick)..."
+  info "安装系统依赖 (Xvfb, ImageMagick, xdotool)..."
   if command -v apt-get &>/dev/null; then
-    apt-get install -y -q xvfb x11-utils x11-apps imagemagick \
+    apt-get install -y -q xvfb x11-utils x11-apps imagemagick xdotool \
       libgtk-3-0 libnss3 libxss1 libasound2 libgbm1 2>/dev/null | tail -1
   elif command -v yum &>/dev/null; then
-    yum install -y -q xorg-x11-server-Xvfb ImageMagick \
+    yum install -y -q xorg-x11-server-Xvfb ImageMagick xdotool \
       xorg-x11-apps gtk3 nss alsa-lib 2>/dev/null | tail -1
   else
-    warn "未知包管理器，请手动安装: xvfb x11-apps imagemagick"
+    warn "未知包管理器，请手动安装: xvfb x11-apps imagemagick xdotool"
   fi
   ok "系统依赖安装完成"
 
