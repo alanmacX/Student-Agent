@@ -291,6 +291,23 @@ def _pids_with_db_open(db_path: str) -> List[int]:
     return pids
 
 
+def _dingtalk_pids() -> List[int]:
+    """All DingTalk processes, matched by cmdline (NOT comm — comm truncates to
+    15 chars to 'com.alibabainc.' which drops the 'dingtalk' substring)."""
+    pids = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmd = f.read()
+        except OSError:
+            continue
+        if b"com.alibabainc.dingtalk" in cmd:
+            pids.append(int(pid))
+    return pids
+
+
 def _scan_pid_for_key(pid: int, ct: bytes) -> Optional[bytes]:
     """Scan a process's writable/anonymous memory for the AES key."""
     regions = []
@@ -359,29 +376,21 @@ def discover_aes_key(force: bool = False) -> dict:
     if not force and _key_cache["hex"] and _validates(bytes.fromhex(_key_cache["hex"]), ct):
         return {"ok": True, "key_hex": _key_cache["hex"], "method": "cache"}
 
-    # Scan the process(es) holding the DB open first, then any process as a
-    # fallback (the key may live in a renderer/helper process).
-    candidates = _pids_with_db_open(db)
-    scanned = set(candidates)
-    for pid in candidates:
-        key = _scan_pid_for_key(pid, ct)
-        if key:
-            return _persist_key(key, pid, "db-holder")
-    for pid_s in os.listdir("/proc"):
-        if not pid_s.isdigit():
-            continue
-        pid = int(pid_s)
-        if pid in scanned:
-            continue
+    # Scan the process(es) holding the DB open first (most likely to hold the
+    # key), then every DingTalk process. The key lives in the main process heap,
+    # but DingTalk may not have the DB file open at scan time, so we must not
+    # require that.
+    holders = _pids_with_db_open(db)
+    others = [p for p in _dingtalk_pids() if p not in holders]
+    for pid in holders + others:
         try:
-            comm = open(f"/proc/{pid}/comm").read().strip()
-        except OSError:
+            key = _scan_pid_for_key(pid, ct)
+        except Exception as e:
+            log.warning("scan of pid %s failed: %s", pid, e)
             continue
-        if "dingtalk" not in comm.lower() and "DingTalk" not in comm:
-            continue
-        key = _scan_pid_for_key(pid, ct)
         if key:
-            return _persist_key(key, pid, "dingtalk-proc")
+            method = "db-holder" if pid in holders else "dingtalk-proc"
+            return _persist_key(key, pid, method)
     return {"ok": False, "error": "key not found in DingTalk process memory"}
 
 
