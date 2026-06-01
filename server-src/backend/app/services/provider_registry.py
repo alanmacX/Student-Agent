@@ -6,18 +6,7 @@ from app.config import settings
 from app.database import db_conn
 
 
-BUILTIN_PROVIDERS: list[dict[str, Any]] = [
-    {
-        "id": "xiaomimimo",
-        "name": "小米 MiMo",
-        "api_type": "xiaomiMimo",
-        "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
-        "models": ["mimo-v2.5-pro"],
-        "icon_name": "m-circle",
-        "color_hex": "FF6900",
-        "is_builtin": True,
-    },
-]
+BUILTIN_PROVIDERS: list[dict[str, Any]] = []
 
 PROVIDER_ALIASES = {
     "mimo": "xiaomimimo",
@@ -92,8 +81,17 @@ async def get_provider_api_key(provider_id: str | None, provider: dict[str, Any]
     if not provider:
         return ""
 
+    # Custom provider: use its stored key, fallback to env var
     if not provider.get("is_builtin", False):
-        return provider.get("api_key", "")
+        key = provider.get("api_key", "").strip()
+        if key:
+            return key
+        # Fallback: try env var via API_KEY_SETTINGS
+        normalized = normalize_provider_id(provider.get("id") or provider_id)
+        _, settings_attr = API_KEY_SETTINGS.get(normalized, ("", ""))
+        if settings_attr:
+            return getattr(settings, settings_attr, "") or ""
+        return ""
 
     normalized = normalize_provider_id(provider.get("id") or provider_id)
     db_key, settings_attr = API_KEY_SETTINGS.get(normalized, ("", ""))
