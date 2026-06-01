@@ -308,38 +308,57 @@ def _dingtalk_pids() -> List[int]:
     return pids
 
 
-def _scan_pid_for_key(pid: int, ct: bytes) -> Optional[bytes]:
-    """Scan a process's writable/anonymous memory for the AES key."""
-    regions = []
-    try:
-        for line in open(f"/proc/{pid}/maps"):
-            p = line.split()
-            if len(p) < 2 or not (p[1][0] == "r" and p[1][1] == "w"):
-                continue
-            path = p[5] if len(p) >= 6 else ""
-            if path and not path.startswith("["):
-                continue  # skip file-backed; keep anon + [heap]/[stack]
-            a, b = p[0].split("-")
-            regions.append((int(a, 16), int(b, 16)))
-    except OSError:
-        return None
+# Cap a single region read so a giant mapping can't blow up RAM on a small box
+# (this scanner once helped trigger an OOM on a 1.8GB host). We stream region by
+# region and never retain more than one region's bytes at a time.
+_MAX_REGION_BYTES = 256 * 1024 * 1024
 
+
+def _iter_rw_regions(pid: int):
+    """Yield decrypted-candidate memory chunks, one writable/anon region at a
+    time, so peak memory stays bounded to a single region."""
+    try:
+        maps = open(f"/proc/{pid}/maps").read().splitlines()
+    except OSError:
+        return
     try:
         mem = open(f"/proc/{pid}/mem", "rb")
     except OSError:
-        return None
-
-    printable = re.compile(rb"[\x20-\x7e]{16,}")
-    chunks = []
-    seen = set()
-    # Pass 1: ASCII candidates (keys have historically been 16 hex chars) — fast.
-    for a, b in regions:
+        return
+    for line in maps:
+        p = line.split()
+        if len(p) < 2 or not (p[1][0] == "r" and p[1][1] == "w"):
+            continue
+        path = p[5] if len(p) >= 6 else ""
+        if path and not path.startswith("["):
+            continue  # skip file-backed; keep anon + [heap]/[stack]
+        a, b = (int(x, 16) for x in p[0].split("-"))
+        size = b - a
+        if size <= 0 or size > _MAX_REGION_BYTES:
+            continue
         try:
             mem.seek(a)
-            data = mem.read(b - a)
+            data = mem.read(size)
         except OSError:
             continue
-        chunks.append(data)
+        yield data
+
+
+def _scan_pid_for_key(pid: int, ct: bytes) -> Optional[bytes]:
+    """Scan a process's writable/anonymous memory for the AES key.
+
+    Streams one region at a time (bounded memory). Within each region it tries
+    ASCII candidates first (keys have historically been 16 hex chars), then a
+    full binary sliding window for the non-ASCII case — so a single pass over
+    each region covers both without retaining all regions in RAM.
+    """
+    try:
+        os.nice(10)  # be gentle; this can run on a memory/CPU-tight host
+    except OSError:
+        pass
+    printable = re.compile(rb"[\x20-\x7e]{16,}")
+    for data in _iter_rw_regions(pid):
+        seen = set()
         for m in printable.finditer(data):
             s = m.group()
             for i in range(len(s) - 15):
@@ -349,8 +368,6 @@ def _scan_pid_for_key(pid: int, ct: bytes) -> Optional[bytes]:
                 seen.add(k)
                 if _validates(k, ct):
                     return k
-    # Pass 2: full binary sliding window — catches non-ASCII keys.
-    for data in chunks:
         for i in range(len(data) - 16):
             if _validates(data[i:i + 16], ct):
                 return data[i:i + 16]
