@@ -11,6 +11,14 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("dingtalk")
 
+
+class DingTalkDBNotReady(FileNotFoundError):
+    """Raised when the DingTalk DB exists but isn't usable yet (logged out / empty).
+
+    Subclasses FileNotFoundError so callers that already treat a missing DB as a
+    graceful "skip this sync" also handle the logged-out case the same way.
+    """
+
 # DingTalk's fixed AES-128-ECB key from libsync.so — same for all installations.
 # Override via env var only if DingTalk changes the key in a future version.
 KEY = os.getenv("DINGTALK_AES_KEY", "9f6ac1b97a9021bd").encode()
@@ -39,8 +47,9 @@ def _discover_db_path() -> str:
     ))
     return host_candidates[0] if host_candidates else ""
 
-DB_SOURCE = _discover_db_path()
-DB_WAL = os.getenv("DINGTALK_DB_WAL", DB_SOURCE + "-wal")
+# NB: the DB path is resolved lazily via _discover_db_path() at call time
+# (see decrypt_db_to_tmp), never cached at import — the container can start
+# before DingTalk has written its DB.
 DECRYPTED_DB_PATH = os.getenv("DINGTALK_DECRYPTED_PATH", "/tmp/dingtalk_decrypted.db")
 PAGE_SIZE = int(os.getenv("DINGTALK_PAGE_SIZE", "4096"))
 WAL_HDR_SIZE = 32
@@ -152,11 +161,16 @@ def decrypt_page(page_data: bytes, cipher: Optional[Any] = None) -> bytes:
 
 
 def decrypt_db_to_tmp(
-        source_path: str = DB_SOURCE,
+        source_path: Optional[str] = None,
         wal_path: Optional[str] = None,
         output_path: str = DECRYPTED_DB_PATH,
 ) -> str:
     """Decrypt the DingTalk SQLite DB and apply WAL frames into a temp DB path."""
+    # Discover the DB path at call time, not import time: the backend container
+    # may start before DingTalk has created its DB (startup race), which would
+    # otherwise cache an empty path forever.
+    if source_path is None:
+        source_path = _discover_db_path()
     if not source_path:
         raise FileNotFoundError("DingTalk DB not found: no *_v3/DBFiles/dingtalk.db discovered")
     wal_path = wal_path if wal_path is not None else source_path + "-wal"
@@ -185,9 +199,21 @@ def decrypt_db_to_tmp(
 
         _apply_wal_frames(tmp_output, wal_path, cipher)
 
+        # Validate the decrypted result is a real SQLite DB before publishing it.
+        # An empty (4096-byte) DB with no account session, a wrong AES key, or a
+        # bad WAL merge all surface here as a non-SQLite header — raise a clear,
+        # diagnosable error instead of letting sqlite3 fail later with the opaque
+        # "file is not a database". Subclassing FileNotFoundError lets the sync
+        # task treat "not logged in yet" as a graceful skip rather than a crash.
         with tmp_output.open("rb+") as db_file:
+            magic = db_file.read(16)
             db_file.flush()
             os.fsync(db_file.fileno())
+        if magic != b"SQLite format 3\x00":
+            raise DingTalkDBNotReady(
+                f"Decrypted DingTalk DB is not a valid SQLite file "
+                f"(header={magic!r}); DingTalk is likely logged out or the DB is empty"
+            )
         os.replace(tmp_output, output)
     finally:
         try:
@@ -199,13 +225,34 @@ def decrypt_db_to_tmp(
 
 
 def _apply_wal_frames(output: Path, wal_path: str, cipher: Any) -> int:
+    """Apply committed WAL frames onto the decrypted DB.
+
+    A WAL file can hold frames from more than one checkpoint generation. Each
+    generation has its own salt (bytes 16..24 of the WAL header); frames whose
+    salt does not match the *current* header are leftovers from a previous
+    generation and must NOT be applied — doing so corrupts the page image and
+    yields a "file is not a database" error. We therefore stop at the first
+    frame whose salt diverges, and only commit pages up to the last commit
+    frame (db_size_after_commit != 0) so a half-written transaction at the tail
+    of the WAL is ignored.
+    """
     wal = Path(wal_path)
     if not wal.exists() or wal.stat().st_size <= WAL_HDR_SIZE:
         return 0
 
-    applied = 0
     with wal.open("rb") as wal_file, output.open("r+b") as dst:
-        wal_file.seek(WAL_HDR_SIZE)
+        wal_header = wal_file.read(WAL_HDR_SIZE)
+        if len(wal_header) < WAL_HDR_SIZE:
+            return 0
+        # WAL header salt occupies bytes 16..24; frame header salt occupies
+        # bytes 8..16. Frames are valid only while their salt matches.
+        header_salt = wal_header[16:24]
+
+        # First pass: collect valid frames belonging to the current generation,
+        # remembering where the last committed transaction ends.
+        pending: List[Tuple[int, bytes]] = []
+        committed_upto = 0  # index into `pending` (exclusive) of last commit
+        applied = 0
         while True:
             header = wal_file.read(FRAME_HDR_SIZE)
             if len(header) < FRAME_HDR_SIZE:
@@ -214,9 +261,17 @@ def _apply_wal_frames(output: Path, wal_path: str, cipher: Any) -> int:
             if len(page) < PAGE_SIZE:
                 break
 
+            if header[8:16] != header_salt:
+                break  # leftover frame from a previous WAL generation
+
             page_no = struct.unpack(">I", header[:4])[0]
-            if page_no <= 0:
-                continue
+            db_size_after_commit = struct.unpack(">I", header[4:8])[0]
+            if page_no > 0:
+                pending.append((page_no, page))
+            if db_size_after_commit != 0:
+                committed_upto = len(pending)  # this frame commits a txn
+
+        for page_no, page in pending[:committed_upto]:
             dst.seek((page_no - 1) * PAGE_SIZE)
             dst.write(decrypt_page(page, cipher))
             applied += 1

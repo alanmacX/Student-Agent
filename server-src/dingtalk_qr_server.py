@@ -192,7 +192,9 @@ def _click_qr_refresh() -> dict:
 
     if geom:
         x = geom["X"] + geom["WIDTH"] // 2
-        y = geom["Y"] + int(geom["HEIGHT"] * 0.45)
+        # The "点击刷新" (refresh) button sits below the QR image, at ~0.56 of the
+        # window height. 0.45 lands on the QR/X-icon center and misses the button.
+        y = geom["Y"] + int(geom["HEIGHT"] * 0.56)
         method = "qr_refresh_center"
         try:
             subprocess.run(

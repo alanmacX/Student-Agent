@@ -203,8 +203,9 @@ async def memory_sync(request: Request):
 @router.get("/status")
 async def dingtalk_status(request: Request):
     db_path = _db_path(request)
-    from app.dingtalk.dingtalk_service import DB_SOURCE
-    wal = DB_SOURCE + "-wal" if DB_SOURCE else ""
+    from app.dingtalk.dingtalk_service import _discover_db_path
+    db_source = _discover_db_path()
+    wal = db_source + "-wal" if db_source else ""
 
     # 1. WAL age — informational only.
     # WAL only updates when new messages arrive; long idle = normal, not a fault.

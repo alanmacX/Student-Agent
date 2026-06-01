@@ -36,6 +36,15 @@ function QRLoginPanel({ onLoginDetected }) {
   const [refreshing, setRefreshing] = useState(false);
   const refreshRef = useRef(null);
   const pollRef = useRef(null);
+  const autoRefreshRef = useRef(null);
+  // Ref guard (not state) so the interval-driven auto-refresh never overlaps a
+  // manual one regardless of render timing.
+  const refreshingRef = useRef(false);
+
+  // DingTalk's QR expires on its own after a short while and then just sits on
+  // a "二维码失效" screen. Re-click the in-app refresh button on this cadence so
+  // the panel always shows a live, scannable code without anyone intervening.
+  const AUTO_REFRESH_MS = 45000;
 
   const fetchScreenshot = useCallback(() => {
     setImgSrc(`/api/dingtalk/qr-screenshot?t=${Date.now()}`);
@@ -43,7 +52,8 @@ function QRLoginPanel({ onLoginDetected }) {
 
   // Click the refresh button inside DingTalk window, then fetch new screenshot
   const refreshQR = useCallback(async () => {
-    if (refreshing) return;
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
     setRefreshing(true);
     try {
       await apiFetch("/api/dingtalk/refresh-qr", { method: "POST" });
@@ -53,8 +63,9 @@ function QRLoginPanel({ onLoginDetected }) {
       // Even if refresh fails, try fetching the current screenshot
     }
     fetchScreenshot();
+    refreshingRef.current = false;
     setRefreshing(false);
-  }, [refreshing, fetchScreenshot]);
+  }, [fetchScreenshot]);
 
   const checkLogin = useCallback(async () => {
     try {
@@ -63,6 +74,7 @@ function QRLoginPanel({ onLoginDetected }) {
         setLoggedIn(true);
         clearInterval(refreshRef.current);
         clearInterval(pollRef.current);
+        clearInterval(autoRefreshRef.current);
         setTimeout(onLoginDetected, 1200);
       }
     } catch (_) {}
@@ -75,9 +87,12 @@ function QRLoginPanel({ onLoginDetected }) {
     refreshRef.current = setInterval(fetchScreenshot, 3000);
     // Poll login status every 2.5s
     pollRef.current = setInterval(checkLogin, 2500);
+    // Auto re-click the in-app refresh so the QR never sits expired
+    autoRefreshRef.current = setInterval(refreshQR, AUTO_REFRESH_MS);
     return () => {
       clearInterval(refreshRef.current);
       clearInterval(pollRef.current);
+      clearInterval(autoRefreshRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -134,7 +149,9 @@ function QRLoginPanel({ onLoginDetected }) {
 
 // ── Status tab ─────────────────────────────────────────────────────────────
 function StatusTab({ status, loggedIn, onSync, onResume, onRefresh, syncing, resuming, loading, onLoginDetected }) {
-  const [showQR, setShowQR] = useState(false);
+  // Auto-expanded: when not logged in we want the scan QR + auto-refresh loop
+  // running immediately, no extra tap. The toggle can still hide it.
+  const [showQR, setShowQR] = useState(true);
 
   if (loading) return <div className="py-12 text-center"><Loader2 size={24} className="mx-auto animate-spin text-[var(--text-tertiary)]" /></div>;
 
@@ -425,6 +442,19 @@ export default function DingTalkStatus() {
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Self-healing: poll login state in the background so a mid-session logout is
+  // detected automatically and the UI flips back to the scan-QR flow without a
+  // manual refresh. Silent (no loading spinner) to avoid flicker.
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const l = await apiFetch("/api/dingtalk/login-status");
+        setLoggedIn(l.logged_in);
+      } catch (_) {}
+    }, 10000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (tab !== "filter") return;
