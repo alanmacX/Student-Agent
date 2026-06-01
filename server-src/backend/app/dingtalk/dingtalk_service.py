@@ -19,9 +19,66 @@ class DingTalkDBNotReady(FileNotFoundError):
     graceful "skip this sync" also handle the logged-out case the same way.
     """
 
-# DingTalk's fixed AES-128-ECB key from libsync.so — same for all installations.
-# Override via env var only if DingTalk changes the key in a future version.
-KEY = os.getenv("DINGTALK_AES_KEY", "9f6ac1b97a9021bd").encode()
+# DingTalk's AES-128-ECB DB key. It is NOT stable across DingTalk versions — a
+# client update can rotate it, which silently breaks decryption ("file is not a
+# database"). Rather than hardcode a value that rots, we resolve the key
+# dynamically and self-heal:
+#   1. DINGTALK_AES_KEY env var (operator override / warm cache), else
+#   2. ask the host QR helper to recover it from the live DingTalk process
+#      memory using the known-plaintext SQLite header as an oracle.
+# The result is cached in-process; on a decrypt failure we force a rediscover,
+# so a version bump that rotates the key recovers with no manual intervention.
+_LEGACY_KEY = "9f6ac1b97a9021bd"  # worked for older DingTalk builds; last resort
+_key_cache: Dict[str, Optional[bytes]] = {"key": None}
+
+
+def _key_from_env() -> Optional[bytes]:
+    raw = os.getenv("DINGTALK_AES_KEY", "")
+    if not raw:
+        return None
+    # Accept either a 16-char ASCII key or 32 hex chars.
+    if len(raw) == 32:
+        try:
+            return bytes.fromhex(raw)
+        except ValueError:
+            pass
+    return raw.encode()
+
+
+def _fetch_key_from_helper() -> Optional[bytes]:
+    """Ask the host QR helper to recover the current AES key from DingTalk's
+    process memory. The helper returns it as 32 hex chars (key_hex)."""
+    import httpx
+    if not QR_SERVICE_URL:
+        return None
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            r = client.get(f"{QR_SERVICE_URL}/aes-key")
+            if r.status_code == 200:
+                key_hex = r.json().get("key_hex")
+                if key_hex:
+                    return bytes.fromhex(key_hex)
+    except Exception as exc:
+        logger.warning("AES key discovery via helper failed: %s", exc)
+    return None
+
+
+def get_aes_key(force_rediscover: bool = False) -> bytes:
+    """Resolve the AES key, preferring cache, then env, then live discovery."""
+    if not force_rediscover and _key_cache["key"]:
+        return _key_cache["key"]
+    if not force_rediscover:
+        env = _key_from_env()
+        if env:
+            _key_cache["key"] = env
+            return env
+    discovered = _fetch_key_from_helper()
+    if discovered:
+        _key_cache["key"] = discovered
+        logger.info("Recovered DingTalk AES key from live process via helper")
+        return discovered
+    # Nothing worked: fall back to env or the legacy key so we at least try.
+    return _key_cache["key"] or _key_from_env() or _LEGACY_KEY.encode()
 
 def _discover_db_path() -> str:
     """Auto-discover the DingTalk SQLite DB by globbing the config dir.
@@ -138,7 +195,7 @@ async def click_qr_refresh() -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def _aes_cipher():
+def _aes_cipher(key: Optional[bytes] = None):
     try:
         from Crypto.Cipher import AES
     except Exception as exc:  # pragma: no cover - depends on deployment image
@@ -146,7 +203,7 @@ def _aes_cipher():
             "pycryptodome is required for DingTalk DB decryption. "
             "Install it with: pip install pycryptodome"
         ) from exc
-    return AES.new(KEY, AES.MODE_ECB)
+    return AES.new(key or get_aes_key(), AES.MODE_ECB)
 
 
 def decrypt_page(page_data: bytes, cipher: Optional[Any] = None) -> bytes:
@@ -183,32 +240,53 @@ def decrypt_db_to_tmp(
         raise FileNotFoundError(f"DingTalk DB path is not a file: {source}")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    tmp_output = output.with_name(f"{output.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
-    cipher = _aes_cipher()
+
+    def _attempt(cipher) -> Tuple[Path, bytes]:
+        """Decrypt main pages + apply WAL with `cipher`; return (tmp_path, magic)."""
+        tmp_output = output.with_name(f"{output.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+        try:
+            with source.open("rb") as src, tmp_output.open("wb") as dst:
+                while True:
+                    page = src.read(PAGE_SIZE)
+                    if not page:
+                        break
+                    if len(page) != PAGE_SIZE:
+                        logger.warning("Ignoring partial DingTalk DB page of %s bytes", len(page))
+                        break
+                    dst.write(decrypt_page(page, cipher))
+            _apply_wal_frames(tmp_output, wal_path, cipher)
+            with tmp_output.open("rb+") as db_file:
+                magic = db_file.read(16)
+                db_file.flush()
+                os.fsync(db_file.fileno())
+            return tmp_output, magic
+        except Exception:
+            tmp_output.unlink(missing_ok=True)
+            raise
+
+    # Does the DB actually hold account data? An empty (logged-out) session is a
+    # ~1-page main DB with a stub WAL — a non-SQLite header there just means "not
+    # logged in", NOT a rotated key, so we must NOT trigger a (costly) key rescan.
+    wal_file = Path(wal_path)
+    has_data = source.stat().st_size > PAGE_SIZE or (
+        wal_file.exists() and wal_file.stat().st_size > WAL_HDR_SIZE + FRAME_HDR_SIZE + PAGE_SIZE
+    )
+
+    tmp_output, magic = _attempt(_aes_cipher())
+
+    # A bad header with real data present means the cached/env key no longer
+    # matches (e.g. a DingTalk update rotated it). Force-rediscover the key from
+    # the live process and retry once — this is the self-healing path.
+    if magic != b"SQLite format 3\x00" and has_data:
+        tmp_output.unlink(missing_ok=True)
+        new_key = get_aes_key(force_rediscover=True)
+        tmp_output, magic = _attempt(_aes_cipher(new_key))
 
     try:
-        with source.open("rb") as src, tmp_output.open("wb") as dst:
-            while True:
-                page = src.read(PAGE_SIZE)
-                if not page:
-                    break
-                if len(page) != PAGE_SIZE:
-                    logger.warning("Ignoring partial DingTalk DB page of %s bytes", len(page))
-                    break
-                dst.write(decrypt_page(page, cipher))
-
-        _apply_wal_frames(tmp_output, wal_path, cipher)
-
-        # Validate the decrypted result is a real SQLite DB before publishing it.
-        # An empty (4096-byte) DB with no account session, a wrong AES key, or a
-        # bad WAL merge all surface here as a non-SQLite header — raise a clear,
-        # diagnosable error instead of letting sqlite3 fail later with the opaque
-        # "file is not a database". Subclassing FileNotFoundError lets the sync
-        # task treat "not logged in yet" as a graceful skip rather than a crash.
-        with tmp_output.open("rb+") as db_file:
-            magic = db_file.read(16)
-            db_file.flush()
-            os.fsync(db_file.fileno())
+        # Validate before publishing: a non-SQLite header now means the account
+        # is genuinely logged out / empty (or the key truly couldn't be found).
+        # DingTalkDBNotReady subclasses FileNotFoundError so the sync task treats
+        # it as a graceful skip rather than a crash.
         if magic != b"SQLite format 3\x00":
             raise DingTalkDBNotReady(
                 f"Decrypted DingTalk DB is not a valid SQLite file "

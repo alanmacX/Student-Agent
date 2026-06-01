@@ -13,7 +13,7 @@ Usage:
   python3 dingtalk_qr_server.py           # default :99 display, port 7777
   DISPLAY=:1 QR_PORT=7778 python3 ...     # override
 """
-import json, logging, os, re, shutil, subprocess, sys, time
+import glob, json, logging, os, re, shutil, struct, subprocess, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Dict, List, Optional, Tuple
 
@@ -221,6 +221,184 @@ def _click_qr_refresh() -> dict:
     return {"ok": True, "x": x, "y": y, "method": method, "window": win_id}
 
 
+# ── AES key auto-discovery ───────────────────────────────────────────────────
+# DingTalk encrypts its SQLite DB with an AES-128-ECB key that can change between
+# client versions. Instead of hardcoding it (which rots on every update), we
+# recover it from the live DingTalk process memory using a known-plaintext
+# oracle: a SQLite DB's first 16 bytes are always "SQLite format 3\0". We find a
+# 16-byte window K in the process's writable memory where
+#   AES-ECB-decrypt(K, encrypted_page1[:16]) == b"SQLite format 3\x00".
+# The result is cached on disk so we only rescan when the key actually breaks.
+SQLITE_MAGIC = b"SQLite format 3\x00"
+KEY_CACHE_FILE = os.getenv("DINGTALK_KEY_CACHE", "/root/.config/DingTalk/.aes_key")
+_key_cache: Dict[str, Optional[str]] = {"hex": None}
+
+
+def _dingtalk_db_path() -> Optional[str]:
+    c = sorted(glob.glob("/root/.config/DingTalk/*_v3/DBFiles/dingtalk.db"))
+    return c[0] if c else None
+
+
+def _oracle_ciphertext(db_path: str) -> Optional[bytes]:
+    """Freshest encrypted page-1 header: prefer the last page-1 frame in the WAL
+    (written with the current key), fall back to the main DB's first page."""
+    wal = db_path + "-wal"
+    try:
+        if os.path.exists(wal) and os.path.getsize(wal) > 32 + 24 + 4096:
+            with open(wal, "rb") as f:
+                f.read(32)  # WAL header
+                last_p1 = None
+                while True:
+                    fh = f.read(24)
+                    if len(fh) < 24:
+                        break
+                    pg = f.read(4096)
+                    if len(pg) < 4096:
+                        break
+                    if struct.unpack(">I", fh[:4])[0] == 1:
+                        last_p1 = pg[:16]
+                if last_p1:
+                    return last_p1
+    except Exception as e:
+        log.warning("WAL oracle read failed: %s", e)
+    try:
+        with open(db_path, "rb") as f:
+            return f.read(16)
+    except Exception:
+        return None
+
+
+def _validates(key: bytes, ct: bytes) -> bool:
+    from Crypto.Cipher import AES
+    try:
+        return AES.new(key, AES.MODE_ECB).decrypt(ct) == SQLITE_MAGIC
+    except Exception:
+        return False
+
+
+def _pids_with_db_open(db_path: str) -> List[int]:
+    pids = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                if os.readlink(f"/proc/{pid}/fd/{fd}") == db_path:
+                    pids.append(int(pid))
+                    break
+        except OSError:
+            continue
+    return pids
+
+
+def _scan_pid_for_key(pid: int, ct: bytes) -> Optional[bytes]:
+    """Scan a process's writable/anonymous memory for the AES key."""
+    regions = []
+    try:
+        for line in open(f"/proc/{pid}/maps"):
+            p = line.split()
+            if len(p) < 2 or not (p[1][0] == "r" and p[1][1] == "w"):
+                continue
+            path = p[5] if len(p) >= 6 else ""
+            if path and not path.startswith("["):
+                continue  # skip file-backed; keep anon + [heap]/[stack]
+            a, b = p[0].split("-")
+            regions.append((int(a, 16), int(b, 16)))
+    except OSError:
+        return None
+
+    try:
+        mem = open(f"/proc/{pid}/mem", "rb")
+    except OSError:
+        return None
+
+    printable = re.compile(rb"[\x20-\x7e]{16,}")
+    chunks = []
+    seen = set()
+    # Pass 1: ASCII candidates (keys have historically been 16 hex chars) — fast.
+    for a, b in regions:
+        try:
+            mem.seek(a)
+            data = mem.read(b - a)
+        except OSError:
+            continue
+        chunks.append(data)
+        for m in printable.finditer(data):
+            s = m.group()
+            for i in range(len(s) - 15):
+                k = s[i:i + 16]
+                if k in seen:
+                    continue
+                seen.add(k)
+                if _validates(k, ct):
+                    return k
+    # Pass 2: full binary sliding window — catches non-ASCII keys.
+    for data in chunks:
+        for i in range(len(data) - 16):
+            if _validates(data[i:i + 16], ct):
+                return data[i:i + 16]
+    return None
+
+
+def discover_aes_key(force: bool = False) -> dict:
+    """Resolve the current DingTalk AES key, scanning live memory if needed."""
+    db = _dingtalk_db_path()
+    if not db:
+        return {"ok": False, "error": "no DingTalk DB found"}
+    ct = _oracle_ciphertext(db)
+    if not ct or len(ct) < 16:
+        return {"ok": False, "error": "could not read encrypted page-1 header"}
+
+    # Warm cache: memory, then disk. Validate against the *current* ciphertext so
+    # a rotated key is detected and triggers a rescan.
+    if not _key_cache["hex"]:
+        try:
+            _key_cache["hex"] = open(KEY_CACHE_FILE).read().strip() or None
+        except OSError:
+            pass
+    if not force and _key_cache["hex"] and _validates(bytes.fromhex(_key_cache["hex"]), ct):
+        return {"ok": True, "key_hex": _key_cache["hex"], "method": "cache"}
+
+    # Scan the process(es) holding the DB open first, then any process as a
+    # fallback (the key may live in a renderer/helper process).
+    candidates = _pids_with_db_open(db)
+    scanned = set(candidates)
+    for pid in candidates:
+        key = _scan_pid_for_key(pid, ct)
+        if key:
+            return _persist_key(key, pid, "db-holder")
+    for pid_s in os.listdir("/proc"):
+        if not pid_s.isdigit():
+            continue
+        pid = int(pid_s)
+        if pid in scanned:
+            continue
+        try:
+            comm = open(f"/proc/{pid}/comm").read().strip()
+        except OSError:
+            continue
+        if "dingtalk" not in comm.lower() and "DingTalk" not in comm:
+            continue
+        key = _scan_pid_for_key(pid, ct)
+        if key:
+            return _persist_key(key, pid, "dingtalk-proc")
+    return {"ok": False, "error": "key not found in DingTalk process memory"}
+
+
+def _persist_key(key: bytes, pid: int, method: str) -> dict:
+    key_hex = key.hex()
+    _key_cache["hex"] = key_hex
+    try:
+        os.makedirs(os.path.dirname(KEY_CACHE_FILE), exist_ok=True)
+        with open(KEY_CACHE_FILE, "w") as f:
+            f.write(key_hex)
+        os.chmod(KEY_CACHE_FILE, 0o600)
+    except OSError as e:
+        log.warning("could not persist AES key cache: %s", e)
+    log.info("recovered DingTalk AES key from pid %s (%s)", pid, method)
+    return {"ok": True, "key_hex": key_hex, "method": method, "pid": pid}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log.debug(f"{self.address_string()} {fmt % args}")
@@ -245,6 +423,16 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 log.warning("screenshot failed: %s", e)
                 self._send(503, str(e).encode(), "text/plain")
+
+        elif self.path == "/aes-key" or self.path == "/aes-key?force=1":
+            try:
+                result = discover_aes_key(force=self.path.endswith("force=1"))
+                code = 200 if result.get("ok") else 503
+                self._send(code, json.dumps(result).encode())
+                log.info("aes-key request: ok=%s method=%s", result.get("ok"), result.get("method") or result.get("error"))
+            except Exception as e:
+                log.warning("aes-key discovery failed: %s", e)
+                self._send(503, json.dumps({"ok": False, "error": str(e)}).encode())
 
         else:
             self._send(404, b"not found", "text/plain")
