@@ -3,6 +3,10 @@ services:
     image: ghcr.io/alanmacx/student-agent/backend:latest
     build: ./backend
     restart: unless-stopped
+    # Cap RAM so a backend leak can't OOM the whole 1.8GB host (kills only this
+    # container, which then restarts). memswap defaults to 2x → 512M swap too.
+    mem_limit: 512m
+    mem_reservation: 256m
     env_file: .env
     environment:
       # Point to the mounted config dir; dingtalk_service.py globs for *_v3/DBFiles/dingtalk.db
