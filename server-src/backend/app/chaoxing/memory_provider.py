@@ -73,6 +73,26 @@ async def run_chaoxing_memory_sync(
     filter_result = filter_messages(messages, sync_state, assignments, now=now)
     candidates = filter_result.get("candidates") or []
 
+    # Audit trail: persist content-judgement drops (mechanical reasons like
+    # already_processed are skipped inside log_drops).
+    try:
+        from app.services.message_audit import log_drops
+        by_id = {str(m.get("id")): m for m in messages}
+        drops = [
+            {
+                "conversation": (by_id.get(sid) or {}).get("conversation_name"),
+                "sender": (by_id.get(sid) or {}).get("sender_name"),
+                "text": (by_id.get(sid) or {}).get("text"),
+                "reason": reason,
+                "stage": "filter",
+            }
+            for sid, reason in (filter_result.get("dropped_reasons") or {}).items()
+        ]
+        if drops:
+            log_drops(db_path, "chaoxing", drops, now.isoformat())
+    except Exception:
+        logger.exception("Chaoxing drop-audit logging failed")
+
     if not candidates:
         await save_sync_state(db_path, filter_result, [], now)
         await _touch_chaoxing_session(db_path, now)

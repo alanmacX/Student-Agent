@@ -27,13 +27,17 @@ async def send_push_to_all_subscribers(
         )).fetchall()
 
     stale_ids = []
-    failed = 0
+    delivered = 0
+    errored = 0
     for row in rows:
         sub_id, endpoint, p256dh, auth = row
-        ok = await _send_one(endpoint, p256dh, auth, title, body, data, tag, icon)
-        if not ok:
+        status = await _send_one(endpoint, p256dh, auth, title, body, data, tag, icon)
+        if status == "ok":
+            delivered += 1
+        elif status == "stale":
             stale_ids.append(sub_id)
-            failed += 1
+        else:  # "error" — transient, keep subscription but not delivered
+            errored += 1
 
     if stale_ids:
         async with aiosqlite.connect(db_path) as db:
@@ -43,10 +47,21 @@ async def send_push_to_all_subscribers(
             )
             await db.commit()
 
-    return {"attempted": len(rows), "failed": failed, "stale_removed": len(stale_ids)}
+    if errored and not delivered:
+        print(f"[Push] WARNING: 0/{len(rows)} delivered ({errored} errors) for tag={tag!r} title={title!r}")
+
+    return {
+        "attempted": len(rows),
+        "delivered": delivered,
+        "failed": errored,
+        "stale_removed": len(stale_ids),
+    }
 
 
-async def _send_one(endpoint, p256dh, auth, title, body, data, tag, icon) -> bool:
+async def _send_one(endpoint, p256dh, auth, title, body, data, tag, icon) -> str:
+    """Send one push. Returns 'ok' (delivered), 'stale' (subscription gone,
+    should be removed) or 'error' (transient failure — keep subscription but
+    treat as NOT delivered)."""
     payload_data = data or {}
     if tag:
         payload_data = {**payload_data, "tag": tag}
@@ -65,16 +80,16 @@ async def _send_one(endpoint, p256dh, auth, title, body, data, tag, icon) -> boo
             vapid_private_key=settings.vapid_private_key,
             vapid_claims={"sub": settings.vapid_mailto},
         )
-        return True
+        return "ok"
     except WebPushException as e:
         status = e.response.status_code if e.response else None
         if status in (404, 410):
-            return False
-        print(f"Push failed (status={status}): {e}")
-        return True
+            return "stale"
+        print(f"[Push] FAILED (status={status}) endpoint={endpoint[:40]}…: {e}")
+        return "error"
     except Exception as e:
-        print(f"Push error: {e}")
-        return True
+        print(f"[Push] ERROR endpoint={endpoint[:40]}…: {e!r}")
+        return "error"
 
 
 async def log_notification_sent(db_path: str, item_id: str, notif_type: str,

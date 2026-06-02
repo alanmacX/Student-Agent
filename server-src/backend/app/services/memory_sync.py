@@ -18,30 +18,36 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
-from .memory_models import key_text, make_assignment_key, parse_iso
+from .memory_models import key_text, parse_iso
 from app.memory.base import MemoryEntry, MemoryRepository, Tier
+from app.memory.keys import canonical_dedupe_key
 
 PENDING_STATUSES = {"未交", "未提交"}
 CST = timezone(timedelta(hours=8))
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+# Dedup keys go through the canonical registry (app.memory.keys) so the
+# structured sync and the LLM engine agree on one key per entity. The registry
+# builders reproduce these exact formats, so existing rows keep matching.
 
 def _assignment_dk(assignment: dict) -> str:
-    k = make_assignment_key(
-        assignment.get("courseName") or assignment.get("course_name"),
-        assignment.get("title"),
+    return canonical_dedupe_key(
+        "assignment",
+        course=assignment.get("courseName") or assignment.get("course_name") or "",
+        title=assignment.get("title") or "",
     )
-    return f"assignment::{key_text(k)}"
 
 
 def _reminder_dk(reminder: dict) -> str:
-    k = key_text(reminder.get("title") or str(reminder.get("id", "")))
-    return f"reminder::{k}"
+    return canonical_dedupe_key(
+        "reminder",
+        title=reminder.get("title") or str(reminder.get("id", "")),
+    )
 
 
 def _course_dk(title: str, start_at: str) -> str:
-    return f"course::{key_text(title)}::{key_text(start_at)}"
+    return canonical_dedupe_key("course", title=title or "", start=start_at or "")
 
 
 def _is_expired(assignment: dict, now: datetime) -> bool:

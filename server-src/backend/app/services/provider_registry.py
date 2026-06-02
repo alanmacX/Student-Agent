@@ -105,6 +105,11 @@ async def get_provider_api_key(provider_id: str | None, provider: dict[str, Any]
 
 
 async def resolve_provider(provider_id: str | None) -> tuple[dict[str, Any], str]:
-    provider = await get_provider_config(provider_id) or dict(BUILTIN_PROVIDERS[0])
+    provider = await get_provider_config(provider_id)
+    if provider is None:
+        provider = dict(BUILTIN_PROVIDERS[0]) if BUILTIN_PROVIDERS else {
+            "id": normalize_provider_id(provider_id),
+            "is_builtin": True,
+        }
     api_key = await get_provider_api_key(provider_id, provider)
     return provider, api_key

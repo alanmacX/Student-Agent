@@ -267,6 +267,14 @@ async def _plan_intent(intent: dict, db_path: str, now: datetime) -> list[Effect
     entity_type = intent.get("entity_type") or ""
     effects: list[Effect] = list(intent.get("effects") or [])
 
+    # Carry the intent's identity onto each effect so the executor can build a
+    # canonical, cross-source dedupe key (see _execute_effects).
+    for ef in effects:
+        if entity_type:
+            ef.params.setdefault("entity_type", entity_type)
+        if entity_name:
+            ef.params.setdefault("entity_name", entity_name)
+
     if not entity_name:
         return effects
 
@@ -353,11 +361,16 @@ async def _execute_effects(
     effects: list[Effect],
     db_path: str,
     now: datetime,
+    msg: NormalisedMessage | None = None,
 ) -> ExecutionResult:
     result = ExecutionResult(ok=True)
     from app.memory.base import MemoryRepository, MemoryEntry, compute_tier, Tier
+    from app.memory.keys import canonical_dedupe_key, kind_from_entity_type
 
     repo = MemoryRepository(db_path)
+    msg = msg or {}
+    msg_source = msg.get("source_type") or "automation"
+    msg_conversation = msg.get("conversation_title") or ""
 
     for ef in effects:
         try:
@@ -367,19 +380,35 @@ async def _execute_effects(
                 for_auto = bool(p.get("for_automation"))
                 expires_at = _parse_iso_or_none(p.get("expires_iso"))
                 tier = compute_tier(importance, expires_at, for_auto, now)
+
+                # Resolve the entity kind from the intent so known kinds
+                # (assignment/course/reminder) get a *canonical* dedupe key that
+                # matches the structured sync — instead of a free-form LLM key
+                # that would create a cross-source duplicate.
+                kind = kind_from_entity_type(p.get("entity_type"))
+                entity_name = p.get("entity_name") or p.get("title") or "消息"
+                if kind != "message":
+                    dedupe_key = canonical_dedupe_key(
+                        kind, course=msg_conversation, title=entity_name,
+                        start=p.get("expires_iso") or "",
+                    )
+                else:
+                    dedupe_key = p.get("dedupe_key") or p.get("entity_key") or ""
+
                 entry = MemoryEntry(
-                    title=p.get("title") or "消息",
+                    title=p.get("title") or entity_name,
                     summary=p.get("summary") or p.get("title") or "",
                     reason=p.get("reason") or "automation engine",
                     importance=importance,
                     action_hint=p.get("action_hint") or "",
                     category=p.get("category") or "notice",
-                    kind="message",
-                    source_type=p.get("source_type") or "automation",
+                    kind=kind,
+                    source_type=p.get("source_type") or msg_source,
                     expires_at=expires_at,
                     hierarchy_tier=tier,
                     for_automation=for_auto,
-                    dedupe_key=p.get("dedupe_key") or p.get("entity_key") or "",
+                    dedupe_key=dedupe_key,
+                    conversation_names=[msg_conversation] if msg_conversation else [],
                     confidence=float(p.get("confidence") or 0.8),
                 )
                 eid = await repo.upsert_entry(entry, now)
@@ -404,38 +433,38 @@ async def _execute_effects(
                 result.memory_archived.extend(ids)
 
             elif ef.type == EffectType.PUSH_NOW:
-                from app.services.push_service import send_push_to_all_subscribers
+                # Route through the unified dispatcher so it's deduped (won't
+                # re-fire on reprocessing) and recorded in notification_log.
+                from app.memory.dispatch import notify_now
                 p = ef.params
-                await send_push_to_all_subscribers(
-                    db_path,
-                    title=p.get("title") or "通知",
-                    body=p.get("body") or "",
-                    tag=f"automation-{uuid.uuid4().hex[:8]}",
+                title = p.get("title") or "通知"
+                body = p.get("body") or ""
+                await notify_now(
+                    db_path, title, body,
+                    item_id=p.get("entity_key") or p.get("dedupe_key") or None,
+                    notif_type="automation",
                     data={"type": "automation"},
                 )
                 result.push_scheduled += 1
 
             elif ef.type == EffectType.SCHEDULE_PUSH:
+                # Deterministic id (idempotent) via the dispatcher — the old
+                # random-uuid INSERT OR IGNORE never actually deduped.
+                from app.memory.dispatch import schedule_push
                 p = ef.params
                 trigger_iso = p.get("trigger_iso")
                 if not trigger_iso:
                     continue
-                async with aiosqlite.connect(db_path) as db:
-                    await db.execute(
-                        """INSERT OR IGNORE INTO scheduled_notifications
-                           (id, title, body, scheduled_at, source_type, reason, created_at)
-                           VALUES (?,?,?,?,?,?,?)""",
-                        (
-                            str(uuid.uuid4()),
-                            p.get("title") or "提醒",
-                            p.get("body") or "",
-                            trigger_iso,
-                            "automation_engine",
-                            p.get("reason") or "memory automation",
-                            now.isoformat(),
-                        ),
-                    )
-                    await db.commit()
+                await schedule_push(
+                    db_path,
+                    p.get("title") or "提醒",
+                    p.get("body") or "",
+                    trigger_iso,
+                    source_type="automation_engine",
+                    source_id=p.get("entity_key") or p.get("dedupe_key") or None,
+                    reason=p.get("reason") or "memory automation",
+                    now=now,
+                )
                 result.push_scheduled += 1
 
             elif ef.type == EffectType.LINK_ENTRIES:
@@ -592,7 +621,7 @@ async def process_message(
         return ExecutionResult(ok=True)
 
     # 6. Execute
-    result = await _execute_effects(effects, db_path, now)
+    result = await _execute_effects(effects, db_path, now, msg)
     logger.info(
         "Automation: applied=%d upserted=%d archived=%d pushes=%d errors=%d",
         result.effects_applied, len(result.memory_upserted),

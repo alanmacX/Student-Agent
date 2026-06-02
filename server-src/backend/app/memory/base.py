@@ -17,6 +17,11 @@ import aiosqlite
 # Physical table name (legacy; kept as-is to avoid a risky rename migration)
 _TABLE = "chaoxing_memory_entries"
 
+# Kinds eligible for cross-source fuzzy reconciliation (title-containment).
+# Deliberately excludes 'message' — free-form chat titles vary too much and
+# would over-merge.
+_RECONCILE_KINDS = {"assignment", "course", "reminder", "exam"}
+
 
 # ── Hierarchy tiers ───────────────────────────────────────────────────────────
 class Tier:
@@ -107,15 +112,32 @@ class MemoryRepository:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
 
+            # Layer 1 — exact dedup key (same entity, same source convention).
             existing = None
             if entry.dedupe_key:
                 existing = await (await db.execute(
-                    f"SELECT id FROM {_TABLE} WHERE dedupe_key=?",
+                    f"SELECT id, source_type FROM {_TABLE} WHERE dedupe_key=?",
                     (entry.dedupe_key,),
                 )).fetchone()
 
+            # Layer 2 — cross-source reconciliation. When two sources disagree on
+            # the exact key (e.g. the LLM titles an assignment slightly
+            # differently than the structured sync), fall back to a conservative
+            # same-kind title-containment match so we update the canonical row
+            # instead of creating a duplicate.
+            reconciled = False
+            if not existing and entry.kind in _RECONCILE_KINDS:
+                existing = await self._reconcile(db, entry)
+                reconciled = existing is not None
+
             if existing:
                 eid = existing["id"]
+                # On a fuzzy reconcile-merge, preserve the existing row's
+                # source_type (the structured/canonical anchor) rather than
+                # letting a later automation pass overwrite it.
+                src = entry.source_type
+                if reconciled and existing["source_type"]:
+                    src = existing["source_type"]
                 await db.execute(
                     f"""UPDATE {_TABLE} SET
                         title=?, summary=?, importance=?, action_hint=?,
@@ -128,7 +150,7 @@ class MemoryRepository:
                         entry.action_hint,
                         expires_at.isoformat(), tier,
                         1 if entry.for_automation else 0,
-                        entry.source_type, entry.kind, entry.category,
+                        src, entry.kind, entry.category,
                         entry.confidence, ni, eid,
                     ),
                 )
@@ -164,8 +186,49 @@ class MemoryRepository:
                         ni, ni, ni, ni,
                     ),
                 )
+            # Index high-signal keys for cross-source reconciliation + the
+            # engine's "related entries" context. Idempotent (PK on key+id).
+            await self._index_entity(db, eid, entry, expires_at)
             await db.commit()
         return eid
+
+    async def _reconcile(self, db, entry: MemoryEntry):
+        """Conservative same-kind reconciliation by normalized-title containment.
+
+        Returns an existing row (id, source_type) describing the same
+        real-world entity, or None. Both titles must be >= 6 normalized chars to
+        avoid over-merging on generic words.
+        """
+        from app.memory.keys import normalize
+
+        nt = normalize(entry.title)
+        if len(nt) < 6:
+            return None
+        rows = await (await db.execute(
+            f"SELECT id, title, source_type FROM {_TABLE} "
+            f"WHERE kind=? AND archived_at IS NULL",
+            (entry.kind,),
+        )).fetchall()
+        for r in rows:
+            et = normalize(r["title"])
+            if len(et) < 6:
+                continue
+            if nt == et or nt in et or et in nt:
+                return r
+        return None
+
+    async def _index_entity(self, db, eid: str, entry: MemoryEntry,
+                            expires_at: datetime) -> None:
+        from app.memory.keys import reconcile_keys
+
+        expires_iso = expires_at.isoformat() if expires_at else None
+        for key in reconcile_keys(entry.kind, entry.title):
+            await db.execute(
+                """INSERT OR REPLACE INTO memory_topic_index
+                   (entity_key, entity_type, memory_id, source_type, expires_at)
+                   VALUES (?,?,?,?,?)""",
+                (key, entry.kind, eid, entry.source_type, expires_iso),
+            )
 
     async def mark_source_synced(
         self, source_type: str, last_ts: int, entry_count: int, now: datetime

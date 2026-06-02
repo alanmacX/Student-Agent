@@ -43,10 +43,17 @@ async def _compute_context_hash(db_path: str) -> str:
         r3 = await (await db.execute(
             "SELECT MAX(sent_at) FROM notification_log"
         )).fetchone()
-    # Include system metrics in hash so health changes trigger evaluation
+    # Include system metrics in hash so *meaningful* health changes trigger
+    # re-evaluation — but bucket them, otherwise the raw per-run jitter in
+    # cpu/mem% changes the hash every time and defeats the skip optimization.
     try:
         import psutil
-        health_sig = f"{int(psutil.cpu_percent(interval=0))}:{int(psutil.virtual_memory().percent)}:{int(psutil.disk_usage('/').percent)}"
+        # CPU: only "pressured" vs not (instantaneous % is pure noise).
+        cpu_band = "hi" if psutil.cpu_percent(interval=0) >= 85 else "ok"
+        # Mem/disk: coarse 10% buckets.
+        mem_band = int(psutil.virtual_memory().percent) // 10
+        disk_band = int(psutil.disk_usage('/').percent) // 10
+        health_sig = f"{cpu_band}:{mem_band}:{disk_band}"
     except Exception:
         health_sig = "na"
     # MaiMBot health

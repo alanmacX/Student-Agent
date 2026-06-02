@@ -110,6 +110,25 @@ def _store(db_path: str, evaluated: List[Dict[str, Any]], last_seen: int) -> Dic
         _set_state(conn, STATE_KEY_LAST_SEEN, str(next_last_seen))
         conn.commit()
 
+    # Audit trail: persist dropped messages so false drops are reviewable.
+    try:
+        from datetime import datetime, timezone
+        from app.services.message_audit import log_drops
+        drops = [
+            {
+                "conversation": m.get("conversation_title") or m.get("cid"),
+                "sender": m.get("sender_name") or m.get("sender_id"),
+                "text": m.get("text"),
+                "reason": m.get("verdict_reason"),
+                "stage": "llm" if str(m.get("verdict_reason", "")).startswith("llm") else "coarse",
+            }
+            for m in evaluated if m.get("verdict") == "drop"
+        ]
+        if drops:
+            log_drops(db_path, "dingtalk", drops, datetime.now(timezone.utc).isoformat())
+    except Exception:
+        logger.exception("DingTalk drop-audit logging failed")
+
     buckets = {"notify": 0, "interest": 0, "drop": 0, "needs_llm": 0}
     for m in evaluated:
         buckets[m.get("verdict", "drop")] = buckets.get(m.get("verdict", "drop"), 0) + 1

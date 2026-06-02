@@ -131,6 +131,28 @@ async def debug_db():
     return {"wal_mode": wal_mode, "table_counts": counts}
 
 
+@router.get("/drops")
+async def debug_drops(source: str | None = None, limit: int = 100):
+    """Recent filtered-out messages (audit trail) for tuning the filters."""
+    limit = max(1, min(int(limit), 500))
+    where = "WHERE source=?" if source else ""
+    params = ([source] if source else []) + [limit]
+    async with db_conn() as db:
+        try:
+            rows = await (await db.execute(
+                f"""SELECT id, source, stage, conversation, sender, text_preview,
+                           reason, dropped_at
+                    FROM message_drop_log {where}
+                    ORDER BY id DESC LIMIT ?""",
+                params,
+            )).fetchall()
+        except Exception:
+            return {"drops": [], "note": "message_drop_log not created yet"}
+        cols = ["id", "source", "stage", "conversation", "sender",
+                "text_preview", "reason", "dropped_at"]
+        return {"drops": [dict(zip(cols, r)) for r in rows]}
+
+
 @router.get("/scheduler")
 async def debug_scheduler():
     """List all scheduled jobs and their next run times."""

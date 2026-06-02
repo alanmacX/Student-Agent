@@ -121,11 +121,29 @@ CATEGORY_PATTERNS: List[Tuple[str, Any]] = [
     ("academic_affair", re.compile(r"(大创|大学生创新|结题|中期检查|立项|评奖|评优|奖学金|助学金|转专业|学籍|选课|绩点|保研|推免|学分|教务|成绩单|四六级|英语等级)")),
 ]
 
-# CS relevance (persona: CS undergrad). Used to gate the "interest" bucket.
-CS_RELATED_RE = re.compile(
-    r"(计算机|算法|编程|程序|代码|软件|开发|前端|后端|全栈|数据库|数据结构|操作系统|网络|人工智能|机器学习|深度学习|神经网络|大模型|AI|LLM|python|java|c\+\+|golang|rust|javascript|linux|算力|GPU|ACM|蓝桥|CTF|kaggle|leetcode|github)",
-    re.I,
-)
+# CS relevance — used to gate the "interest" bucket. The keyword list is
+# configurable via DINGTALK_CS_KEYWORDS (comma-separated) so it can be kept in
+# sync with the LLM persona (DINGTALK_PERSONA); it falls back to the default
+# CS-undergrad list below when the env var is unset.
+_DEFAULT_CS_KEYWORDS = [
+    "计算机", "算法", "编程", "程序", "代码", "软件", "开发", "前端", "后端", "全栈",
+    "数据库", "数据结构", "操作系统", "网络", "人工智能", "机器学习", "深度学习",
+    "神经网络", "大模型", "AI", "LLM", "python", "java", r"c\+\+", "golang", "rust",
+    "javascript", "linux", "算力", "GPU", "ACM", "蓝桥", "CTF", "kaggle", "leetcode",
+    "github",
+]
+
+
+def _build_cs_regex() -> "re.Pattern":
+    raw = os.getenv("DINGTALK_CS_KEYWORDS", "").strip()
+    if raw:
+        words = [w.strip() for w in raw.split(",") if w.strip()]
+    else:
+        words = _DEFAULT_CS_KEYWORDS
+    return re.compile("(" + "|".join(words) + ")", re.I)
+
+
+CS_RELATED_RE = _build_cs_regex()
 
 
 def _parse_cid(cid: str) -> Tuple[Optional[str], bool]:
