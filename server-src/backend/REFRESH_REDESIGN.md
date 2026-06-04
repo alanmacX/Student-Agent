@@ -105,7 +105,7 @@ mem_entries = await repo.query_for_agent(now, user_message=user_message, max_tie
 | **P0** | A1 上下文注入修复 | 极低 | 动态信息立即进 agent | ✅ 已上线+验证 |
 | **P1** | R1+R2 `compute_sync_interval` 信号驱动 | 低 | 夜间不空转、多源加速 | ✅ 已上线+验证 |
 | **P2** | R3+R4 增量/定向刷新 | 中 | 降成本降延迟 | ✅ 已上线 |
-| **P3** | A2 意图归一(非LLM) | 中 | 路由更准 | ⬜ 待做 |
+| **P3** | A2 意图归一(非LLM) | 中 | 路由更准 | ✅ 已上线 |
 | **P4** | A3 管线事件化 | 高 | 架构弹性 | ⬜ 待做 |
 
 ### P0 实现（已上线）
@@ -137,6 +137,17 @@ Layer B(tier2 关键词上下文)生效。线上实测：空消息只注入 1 �
 - 修复 `trigger_memory_scan` 的 latent bug：原先 `run_memory_sweep(db_path)`
   传错函数+错参类型(期望 app_state)，后台任务静默 AttributeError，从不扫描。
   现改为后台跑 `run_memory_agent(scope="changed")`，是真正的增量扫描。
+
+### P3 实现（已上线）
+- 新增 `app/services/intent.py` 作为路由单一权威：`SYNONYMS`(同义词→规范词，
+  加性扩展不删原文)、`SUBAGENT_KEYWORDS`、`TOOL_KEYWORDS`、`plan_subagents`、
+  `filter_tool_names`(评分>0 入选，全不中才 fallback 全集)。
+- `orchestrator_plan` / `_filter_schedule_tools` 改为薄封装调用 intent.py，
+  内联的两份写死关键词字典删除。
+- 召回提升示例：「同步一下学习通」(同步→刷新)、「内存占用多少」(内存→系统)、
+  「加个组会」(加个→创建/组会→会议) 旧版都漏，新版命中。
+- 代价：共享概念(如「删除」)会带出兄弟工具，轻微过包含，仅多耗 LLM 输入
+  token、不影响正确性。后续可叠加 LLM 路由(设计 P3 step2)而不改调用点。
 
 ---
 

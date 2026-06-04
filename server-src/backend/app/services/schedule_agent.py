@@ -262,19 +262,10 @@ async def build_turn_context(db_path, chaoxing_svc, now, window_hours=48, user_m
 
 
 def orchestrator_plan(user_text: str) -> dict:
-    lower = user_text.lower()
-    sub_agents = []
-    if any(kw in lower for kw in ["日历", "日程", "会议", "安排", "冲突", "calendar"]):
-        sub_agents.append("calendar")
-    if any(kw in lower for kw in ["提醒", "待办", "todo", "reminder", "完成"]):
-        sub_agents.append("reminders")
-    if any(kw in lower for kw in ["课", "课程", "课表", "教室", "调课", "停课", "补课"]):
-        sub_agents.append("courses")
-    if any(kw in lower for kw in ["学习通", "作业", "ddl", "deadline", "通知", "消息"]):
-        sub_agents.append("chaoxing")
-    expects_mutation = any(kw in lower for kw in ["创建", "添加", "改成", "修改", "删除", "完成", "取消", "提醒我"])
-    # No fallback to all 4 — greetings / generic messages get empty plan → minimal context
-    return {"sub_agents": sub_agents[:4], "expects_mutation": expects_mutation}
+    # Routing lives in intent.py (synonym-expanded, scored). Greetings / generic
+    # messages still get an empty plan → minimal context (no fallback to all 4).
+    from .intent import plan_subagents
+    return plan_subagents(user_text)
 
 
 async def collect_reports(plan, db_path, chaoxing_svc, now, window_hours=48) -> str:
@@ -313,46 +304,13 @@ async def collect_reports(plan, db_path, chaoxing_svc, now, window_hours=48) -> 
 
 
 def _filter_schedule_tools(tools: list, user_message: str) -> list:
-    """Filter schedule tools by Chinese keyword relevance to cut LLM input tokens."""
-    msg = user_message.lower()
-    _SCHEDULE_KEYWORDS: dict[str, list[str]] = {
-        "get_schedule_context":        ["课", "作业", "日程", "提醒", "今天", "明天", "安排", "有什么", "看一下"],
-        "read_message_memory":         ["学习通", "记忆", "memory", "消息", "通知", "重要"],
-        "refresh_message_memory":      ["刷新", "扫描", "更新记忆", "重新扫", "重新"],
-        "get_chaoxing_assignments":    ["作业", "assignment", "deadline", "截止", "ddl", "待交", "提交"],
-        "get_chaoxing_messages":       ["学习通", "原始消息", "群消息", "最近消息"],
-        "read_dingtalk_messages":      ["钉钉", "dingtalk", "群消息", "私信", "群聊", "通知"],
-        "delete_message_memory":       ["删除记忆", "删掉", "删除", "清掉"],
-        "list_reminders":              ["提醒", "待办", "todo", "reminder", "清单", "有哪些提醒"],
-        "create_reminder":             ["创建提醒", "添加提醒", "新建提醒", "提醒我", "加个提醒", "设个提醒"],
-        "update_reminder":             ["修改提醒", "改提醒", "更新提醒", "改一下提醒"],
-        "complete_reminder":           ["完成", "标记完成", "做完", "已完成", "勾掉"],
-        "delete_reminder":             ["删除提醒", "删提醒", "移除提醒"],
-        "list_courses":                ["课", "课程", "课表", "上课", "教室", "调课", "停课", "补课", "课程表"],
-        "import_timetable":            ["导入课程", "导入课表", "课程表导入", "录入课程", "录入课表"],
-        "list_calendar_events":        ["日历", "日程", "会议", "安排", "事件", "calendar", "活动"],
-        "create_calendar_event":       ["创建日历", "添加日历", "新建日程", "创建事件", "安排会议", "创建会议"],
-        "update_calendar_event":       ["修改日历", "改日历", "更新日程", "改事件", "修改事件"],
-        "delete_calendar_event":       ["删除日历", "删日历", "删除事件", "删事件", "取消会议"],
-        "list_scheduled_notifications": ["定时推送", "定时通知", "待发通知", "推送列表", "定时提醒"],
-        "schedule_notification":       ["定时推送", "定时提醒", "安排推送", "提醒我", "到时候"],
-        "cancel_scheduled_notification": ["取消推送", "取消定时", "取消通知", "取消提醒"],
-        "send_push_notification":      ["推送", "通知", "发送通知", "立刻通知", "马上提醒", "提醒我", "截止", "deadline"],
-        "get_memory_insights":         ["学习通", "记忆", "memory", "洞察", "分析"],
-        "get_system_status":           ["系统", "状态", "运行", "standby", "登录", "cpu", "内存", "ram", "磁盘", "disk", "健康", "health", "运行时间", "uptime", "钉钉状态"],
-        "save_memory":                 ["记住", "记忆", "偏好", "习惯", "remember", "我喜欢", "我习惯", "我一般"],
-        "delete_memory":               ["忘记", "删除记忆", "删除偏好", "forget"],
-        "list_memories":               ["我的记忆", "我的偏好", "记忆列表", "所有记忆"],
-        "trigger_memory_scan":         ["扫描", "立刻检查", "帮我扫", "触发扫描", "检查学习通"],
-        "set_push_config":             ["静默", "免打扰", "推送设置", "推送配置", "间隔", "quiet"],
-    }
-    ALWAYS_INCLUDE = {"get_schedule_context"}
-    relevant = [
-        t for t in tools
-        if t.name in ALWAYS_INCLUDE
-        or any(kw in msg for kw in _SCHEDULE_KEYWORDS.get(t.name, [t.name]))
-    ]
-    return relevant if len(relevant) >= 1 else tools
+    """Filter schedule tools by relevance to cut LLM input tokens.
+
+    Routing keywords + synonym expansion + scoring live in intent.py.
+    """
+    from .intent import filter_tool_names
+    keep = set(filter_tool_names(user_message, [t.name for t in tools]))
+    return [t for t in tools if t.name in keep]
 
 
 def _build_schedule_tools() -> list:
