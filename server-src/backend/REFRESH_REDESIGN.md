@@ -104,7 +104,7 @@ mem_entries = await repo.query_for_agent(now, user_message=user_message, max_tie
 |------|------|------|------|------|
 | **P0** | A1 上下文注入修复 | 极低 | 动态信息立即进 agent | ✅ 已上线+验证 |
 | **P1** | R1+R2 `compute_sync_interval` 信号驱动 | 低 | 夜间不空转、多源加速 | ✅ 已上线+验证 |
-| **P2** | R3+R4 增量/定向刷新 | 中 | 降成本降延迟 | ⬜ 待做 |
+| **P2** | R3+R4 增量/定向刷新 | 中 | 降成本降延迟 | ✅ 已上线 |
 | **P3** | A2 意图归一(非LLM) | 中 | 路由更准 | ⬜ 待做 |
 | **P4** | A3 管线事件化 | 高 | 架构弹性 | ⬜ 待做 |
 
@@ -125,7 +125,18 @@ Layer B(tier2 关键词上下文)生效。线上实测：空消息只注入 1 �
 - `chaoxing_sync.py` 外层 cap 由 `chaoxing_sync_interval`(300) 放宽到硬上界 900，
   否则夜间退避会被砍回 5 分钟。
 - 旧的 `_next_interval` / `_in_important_window` / `_next_interval_from_activity`
-  已无调用方（dead code），保留未删，可在 P2/清理时移除。
+  已无调用方（dead code），保留未删，可在后续清理时移除。
+
+### P2 实现（已上线）
+- `run_memory_agent` 新增 `scope`(all/changed/conversation) + `conversation_ids`，
+  由新辅助函数 `_fetch_for_scope` 收窄 *抓取* 范围（LLM 抽取不变）：
+  - `changed`(默认)：先 probe，只抓签名变化的会话，并持久化签名。
+  - `conversation`：只抓指定会话。
+  - `all`：旧的全量 12×20。
+- `refresh_message_memory` 工具暴露 scope/conversation_id，默认 changed。
+- 修复 `trigger_memory_scan` 的 latent bug：原先 `run_memory_sweep(db_path)`
+  传错函数+错参类型(期望 app_state)，后台任务静默 AttributeError，从不扫描。
+  现改为后台跑 `run_memory_agent(scope="changed")`，是真正的增量扫描。
 
 ---
 

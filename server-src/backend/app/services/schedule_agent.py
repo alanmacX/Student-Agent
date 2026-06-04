@@ -380,8 +380,27 @@ def _build_schedule_tools() -> list:
         ),
         ToolDefinition(
             name="refresh_message_memory",
-            description="触发学习通 Memory Agent 重新扫描近期消息并提取记忆",
-            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            description=(
+                "触发学习通 Memory Agent 扫描近期消息并提取记忆。"
+                "scope=changed（默认，推荐）只扫描自上次以来有变化的会话，最快最省；"
+                "scope=all 重扫全部会话（用户明确要‘全部重扫一遍’时才用）；"
+                "scope=conversation 只扫描指定的某个会话（需配合 conversation_id）。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "scope": {
+                        "type": "string",
+                        "enum": ["changed", "all", "conversation"],
+                        "description": "扫描范围，默认 changed",
+                    },
+                    "conversation_id": {
+                        "type": "string",
+                        "description": "scope=conversation 时指定的会话 ID",
+                    },
+                },
+                "additionalProperties": False,
+            },
         ),
         ToolDefinition(
             name="get_chaoxing_assignments",
@@ -764,7 +783,15 @@ async def _execute_schedule_tool(
         if not provider or not model or not api_key:
             return "错误: 缺少模型配置，无法刷新学习通 memory。"
         from .memory_agent import run_memory_agent
-        result = await run_memory_agent(chaoxing_svc, db_path, provider, model, api_key)
+        scope = tc.arguments.get("scope") or "changed"
+        if scope not in ("changed", "all", "conversation"):
+            scope = "changed"
+        conv_id = tc.arguments.get("conversation_id")
+        conversation_ids = [conv_id] if (scope == "conversation" and conv_id) else None
+        result = await run_memory_agent(
+            chaoxing_svc, db_path, provider, model, api_key,
+            scope=scope, conversation_ids=conversation_ids,
+        )
         return json.dumps(result, ensure_ascii=False)
     elif tc.name in ("get_chaoxing_assignments", "read_chaoxing_assignments"):
         return await _get_assignments(chaoxing_svc)
@@ -1071,10 +1098,24 @@ async def _execute_schedule_tool(
             ],
         }, ensure_ascii=False)
     elif tc.name == "trigger_memory_scan":
+        # Fire-and-forget an incremental (changed-only) message scan. (Previously
+        # this wrongly called run_memory_sweep(db_path) — wrong fn + wrong arg type,
+        # so it silently AttributeError'd and never scanned anything.)
+        if not provider or not model or not api_key:
+            return "错误: 缺少模型配置，无法触发学习通扫描。"
         import asyncio as _asyncio
-        from app.tasks.memory_sweep import run_memory_sweep
-        _asyncio.create_task(run_memory_sweep(db_path))
-        return json.dumps({"ok": True, "message": "已触发学习通扫描，结果将在约 1 分钟内更新。"})
+        from .memory_agent import run_memory_agent
+
+        async def _bg_scan():
+            try:
+                await run_memory_agent(
+                    chaoxing_svc, db_path, provider, model, api_key, scope="changed",
+                )
+            except Exception as e:
+                print(f"[trigger_memory_scan] background scan failed: {e}", flush=True)
+
+        _asyncio.create_task(_bg_scan())
+        return json.dumps({"ok": True, "message": "已触发学习通增量扫描，结果将在约 1 分钟内更新。"})
     elif tc.name == "set_push_config":
         quiet_until = tc.arguments.get("quiet_until")
         interval = tc.arguments.get("standby_interval_minutes")

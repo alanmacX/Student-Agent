@@ -9,6 +9,27 @@ from .memory_models import display_text, key_text, make_assignment_key, parse_is
 from .memory_reducer import get_insights, reduce_memory, sweep_memory
 
 
+async def _fetch_for_scope(chaoxing_svc, db_path, scope, conversation_ids):
+    """Narrow the message fetch by scope. Returns list of message dicts."""
+    if scope == "conversation" and conversation_ids:
+        return await chaoxing_svc.fetch_recent_messages(
+            changed_conversation_ids=conversation_ids, per_conversation=20
+        )
+    if scope == "changed":
+        probes = await chaoxing_svc.fetch_conversation_probes()
+        changed = await chaoxing_svc._filter_changed_probes(probes, db_path)
+        if not changed:
+            return []
+        msgs = await chaoxing_svc.fetch_recent_messages(
+            changed_conversation_ids=changed, per_conversation=20
+        )
+        # Persist signatures so the next "changed" pass doesn't re-pull the same.
+        await chaoxing_svc._save_probe_signatures(probes, db_path)
+        return msgs
+    # default "all"
+    return await chaoxing_svc.fetch_recent_messages(max_conversations=12, per_conversation=20)
+
+
 async def run_memory_agent(
     chaoxing_svc,
     db_path: str,
@@ -17,10 +38,18 @@ async def run_memory_agent(
     api_key: str,
     muted_names: set[str] = None,
     assignments: list[dict] | None = None,
+    scope: str = "all",
+    conversation_ids: list[str] | None = None,
 ) -> dict:
+    """scope:
+    - "all"          : fetch up to 12 conversations × 20 msgs (full pass).
+    - "changed"      : probe first, fetch only conversations whose signature changed.
+    - "conversation" : fetch only the given conversation_ids.
+    The LLM extraction is unchanged; scope only narrows the *fetch* to cut cost.
+    """
     now = datetime.now(timezone.utc)
     sync_state = await load_sync_state(db_path)
-    messages = await chaoxing_svc.fetch_recent_messages(max_conversations=12, per_conversation=20)
+    messages = await _fetch_for_scope(chaoxing_svc, db_path, scope, conversation_ids)
     if not messages:
         await _touch_chaoxing_session(db_path, now)
         return {"candidate_count": 0, "kept_count": 0, "processed_ids": [], "new_entry_ids": []}
