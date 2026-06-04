@@ -27,8 +27,10 @@ async def run_chaoxing_probe_adaptive(app_state, scheduler):
         next_interval = await app_state.chaoxing_svc.adaptive_sync_pass(
             app_state.settings.database_path, assignments=assignments
         )
-        max_interval = app_state.settings.chaoxing_sync_interval
-        next_interval = min(next_interval, max_interval)
+        # compute_sync_interval already owns the full cadence decision and self-caps
+        # at 900s; only enforce a hard safety ceiling so a bad signal can't stall sync.
+        # (The old chaoxing_sync_interval=300 cap defeated the night back-off.)
+        next_interval = min(next_interval, 900.0)
 
         now = datetime.now(timezone.utc)
 

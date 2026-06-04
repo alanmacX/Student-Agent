@@ -10,6 +10,8 @@ import json
 import logging
 import random
 import re
+import time
+import zoneinfo
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import unquote
@@ -416,6 +418,88 @@ def _parse_assignments_html(html: str, course_id: str, course_name: str) -> list
             "remainingTime": time_str,
         })
     return assignments
+
+
+# ---------------------------------------------------------------------------
+# Signal-driven sync cadence (P1) — replaces the hard-coded interval ladder.
+# Pure function so it is unit-testable; thresholds live here, not scattered
+# across branches.
+# ---------------------------------------------------------------------------
+
+def _min_minutes_to_due(assignments: list[dict], now: datetime) -> float | None:
+    """Minutes until the nearest *future* assignment deadline, or None."""
+    best: float | None = None
+    for a in assignments or []:
+        due_str = a.get("dueDate") or a.get("due_date")
+        if not due_str:
+            continue
+        try:
+            due = datetime.fromisoformat(str(due_str).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        mins = (due - now).total_seconds() / 60.0
+        if mins > 0 and (best is None or mins < best):
+            best = mins
+    return best
+
+
+def _dingtalk_active(window_minutes: int = 10) -> bool:
+    """True if the DingTalk WAL was written within the last `window_minutes`."""
+    import os
+    wal_path = os.getenv("DINGTALK_WAL_PATH", "/dingtalk_db/dingtalk.db-wal")
+    try:
+        age = time.time() - os.path.getmtime(wal_path)
+        return age < window_minutes * 60
+    except OSError:
+        return False
+
+
+def compute_sync_interval(
+    *,
+    changed: int,
+    consecutive_no_change: int,
+    now_local: datetime,
+    imminent_deadline_min: float | None,
+    dingtalk_active: bool,
+    urgent_recent_memory: bool,
+) -> float:
+    """Decide the next Chaoxing sync interval (seconds) from current signals.
+
+    Priority: hard acceleration > night back-off > activity-follow > idle ladder.
+    """
+    hour = now_local.hour
+    night = hour >= 23 or hour < 7
+
+    # 1) Hard acceleration — something time-critical is happening right now.
+    if imminent_deadline_min is not None and imminent_deadline_min <= 60:
+        return 45.0
+    if urgent_recent_memory:
+        return 45.0
+
+    # 2) Night back-off — don't burn cycles at 3am unless a deadline is close.
+    if night:
+        if imminent_deadline_min is not None and imminent_deadline_min <= 180:
+            return 120.0
+        return 900.0
+
+    # 3) Activity-follow — recent change in messages or DingTalk → poll tighter.
+    if changed > 0:
+        return random.uniform(45, 90)
+    if dingtalk_active:
+        return random.uniform(60, 120)
+
+    # 4) Idle back-off ladder — the longer nothing changes, the slower we poll.
+    if consecutive_no_change >= 12:
+        return 600.0
+    if consecutive_no_change >= 8:
+        return 300.0
+    if consecutive_no_change >= 4:
+        return 180.0
+    if consecutive_no_change >= 2:
+        return 120.0
+    return 90.0
 
 
 # ---------------------------------------------------------------------------
@@ -1076,9 +1160,38 @@ class ChaoxingService:
         await self._touch_session_activity(db_path, now)
         if assignments is None:
             assignments = await self.fetch_all_pending_assignments()
-        important_interval = self._next_interval(consecutive_no_change, self._in_important_window(assignments))
-        activity_interval = await self._next_interval_from_activity(db_path, now)
-        return min(important_interval, activity_interval)
+
+        # ── Gather signals for the signal-driven cadence decision (P1) ──
+        signals = {
+            "changed": len(changed_ids),
+            "consecutive_no_change": consecutive_no_change,
+            "now_local": now.astimezone(zoneinfo.ZoneInfo("Asia/Shanghai")),
+            "imminent_deadline_min": _min_minutes_to_due(assignments, now),
+            "dingtalk_active": _dingtalk_active(),
+            "urgent_recent_memory": await self._has_urgent_recent_memory(db_path, now),
+        }
+        interval = compute_sync_interval(**signals)
+        log.debug(
+            "sync cadence: %.0fs from signals %s", interval,
+            {k: (round(v, 1) if isinstance(v, float) else v)
+             for k, v in signals.items() if k != "now_local"},
+        )
+        return interval
+
+    async def _has_urgent_recent_memory(self, db_path: str, now: datetime) -> bool:
+        """True if a high-importance memory entry was extracted in the last 15 min."""
+        cutoff = (now - timedelta(minutes=15)).isoformat()
+        try:
+            async with aiosqlite.connect(db_path) as db:
+                row = await (await db.execute(
+                    "SELECT 1 FROM chaoxing_memory_entries "
+                    "WHERE importance='high' AND archived_at IS NULL "
+                    "AND COALESCE(extracted_at, updated_at, sent_at) > ? LIMIT 1",
+                    (cutoff,),
+                )).fetchone()
+            return row is not None
+        except Exception:
+            return False
 
     async def _touch_session_activity(self, db_path: str, now: datetime):
         async with aiosqlite.connect(db_path) as db:

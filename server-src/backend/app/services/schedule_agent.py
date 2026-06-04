@@ -41,7 +41,7 @@ async def run_schedule_agent(
     system_prompt = custom_prompt or STATIC_SYSTEM_PROMPT
     plan = orchestrator_plan(user_message)
     dynamic_context = build_dynamic_context(now)
-    turn_context = await build_turn_context(db_path, chaoxing_svc, now)
+    turn_context = await build_turn_context(db_path, chaoxing_svc, now, user_message=user_message)
     reports = await collect_reports(plan, db_path, chaoxing_svc, now)
 
     merged_system = f"{dynamic_context}\n\n{system_prompt}\n\n{turn_context}"
@@ -168,7 +168,7 @@ def build_dynamic_context(now: datetime | None = None) -> str:
 _build_dynamic_context = build_dynamic_context
 
 
-async def build_turn_context(db_path, chaoxing_svc, now, window_hours=48) -> str:
+async def build_turn_context(db_path, chaoxing_svc, now, window_hours=48, user_message: str = "") -> str:
     end = now + timedelta(hours=window_hours)
     rows = {}
     async with aiosqlite.connect(db_path) as db:
@@ -234,10 +234,10 @@ async def build_turn_context(db_path, chaoxing_svc, now, window_hours=48) -> str
     # Legacy rows["memory"] still used as fallback if new repo has nothing.
     try:
         from app.memory.base import MemoryRepository
-        # Infer current turn text from the last few lines (not available here,
-        # so pass empty string — Layer A always injects, Layer B skipped)
+        # Layer A (tier 0/1) always injects; Layer B (tier 2) is keyword-matched
+        # against the current user message so dynamic context surfaces per-turn.
         repo = MemoryRepository(db_path)
-        mem_entries = await repo.query_for_agent(now, user_message="", max_tier=2, limit=8)
+        mem_entries = await repo.query_for_agent(now, user_message=user_message, max_tier=2, limit=8)
         if mem_entries:
             def _tier_label(t):
                 return {0:"🔴", 1:"🟡", 2:"⚪"}.get(t, "⚪")

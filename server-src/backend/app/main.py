@@ -74,21 +74,10 @@ async def health_detail():
         result["dingtalk"] = {"status": "unknown"}
     # Chaoxing
     result["chaoxing"] = {"logged_in": getattr(app.state.chaoxing_svc, "is_logged_in", False)}
-    # MaiMBot
-    try:
-        from app.tasks.maimbot_health import _is_running, _check_napcat
-        result["maimbot"] = {
-            "core_running": await _is_running("maim-bot-core"),
-            "napcat_running": await _is_running("maim-bot-napcat"),
-            "napcat_alive": await _check_napcat(),
-        }
-    except Exception:
-        result["maimbot"] = {"status": "unknown"}
     return result
 
 
 from app.routers import conversations, chat, schedule, chaoxing, providers, settings as settings_router, push, reminders, data, analytics
-from app.routers import maimbot as maimbot_router
 from app.dingtalk.router import router as dingtalk_router
 
 app.include_router(conversations.router)
@@ -103,7 +92,6 @@ app.include_router(reminders.router)
 app.include_router(data.router)
 app.include_router(dingtalk_router)
 app.include_router(analytics.router)
-app.include_router(maimbot_router.router)
 
 if settings.debug:
     from app.routers.debug import router as debug_router

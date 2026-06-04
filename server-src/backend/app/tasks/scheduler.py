@@ -26,7 +26,6 @@ def init_scheduler(app_state):
     from app.dingtalk.task import run_dingtalk_sync
     from app.dingtalk.task import run_dingtalk_memory_task
     from app.tasks.health_monitor import run_health_check
-    from app.tasks.maimbot_health import run_maimbot_health_check
 
     scheduler.add_job(
         run_chaoxing_probe_adaptive,
@@ -108,16 +107,6 @@ def init_scheduler(app_state):
         IntervalTrigger(seconds=180),
         args=[app_state],
         id="dingtalk_memory",
-        max_instances=1,
-        coalesce=True,
-        misfire_grace_time=120,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_maimbot_health_check,
-        IntervalTrigger(minutes=5),
-        args=[app_state],
-        id="maimbot_health",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=120,
