@@ -1,6 +1,6 @@
 # Student-Agent
 
-一个面向大学生的智能助手系统。集成学习通（Chaoxing）、钉钉（DingTalk）消息监控，配备 26 个工具的 LLM 日程代理、后台自主决策引擎、以及基于 PWA 的 Web Push 推送通知。
+一个面向大学生的智能助手系统。集成学习通（Chaoxing）、钉钉（DingTalk）消息监控，配备 29 个工具的 LLM 日程代理、后台自主决策引擎、以及基于 PWA 的 Web Push 推送通知。
 
 ---
 
@@ -124,7 +124,7 @@ Standby Agent（每15分钟）
 │                        用户设备（PWA）                            │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │  React SPA (Vite)                                        │   │
-│  │  ├─ Schedule Agent 聊天（26 个工具）                       │   │
+│  │  ├─ Schedule Agent 聊天（29 个工具）                       │   │
 │  │  ├─ Hub 仪表盘（提醒、记忆、便签）                         │   │
 │  │  ├─ Settings（提供商、推送、用量统计）                      │   │
 │  │  └─ Service Worker（Web Push 接收 + 离线缓存）             │   │
@@ -144,7 +144,7 @@ Standby Agent（每15分钟）
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐      │
 │  │ Chat Agent   │  │ Schedule     │  │ Standby Agent      │      │
 │  │ (通用对话)    │  │ Agent        │  │ (后台决策引擎)       │      │
-│  │              │  │ (26个工具)    │  │ 每15分钟自主判断     │      │
+│  │              │  │ (29个工具)    │  │ 每15分钟自主判断     │      │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬─────────────┘      │
 │         │                 │                  │                    │
 │  ┌──────▼─────────────────▼──────────────────▼─────────────┐     │
@@ -160,7 +160,7 @@ Standby Agent（每15分钟）
 │  ┌────────────────┐  ┌─────────────────┐  ┌─────────────────┐   │
 │  │ Chaoxing 同步   │  │ DingTalk 解密    │  │ LLM Provider    │   │
 │  │ (学习通 API)    │  │ + 三级过滤       │  │ Router          │   │
-│  │ 5分钟轮询       │  │ AES-128-ECB     │  │ 多提供商支持     │   │
+│  │ 自适应轮询      │  │ AES-128-ECB     │  │ 多提供商支持     │   │
 │  └────────────────┘  └─────────────────┘  └─────────────────┘   │
 └──────────────────────────────────────────────────────────────────┘
                          │
@@ -183,8 +183,8 @@ Standby Agent（每15分钟）
     │
     ▼
 ┌─────────────────────────────────────────────┐
-│  Keyword Router（中文关键词匹配）             │
-│  "提醒" → 匹配 create_reminder 工具          │
+│  Intent Router（intent.py：同义词+评分）      │
+│  "提醒/待办" → 匹配 create_reminder 工具      │
 │  仅将相关工具传给 LLM（节省 token）           │
 └────────────────────┬────────────────────────┘
                      ▼
@@ -302,16 +302,25 @@ DingTalk 消息  ──┘          │
 
 新增消息源只需写一个 `_normalise()` 适配函数，无需改动引擎核心。
 
-### 2. 关键词路由 — 省 token 的工具过滤
+### 2. 意图路由 — 省 token 的工具过滤
 
-Schedule Agent 拥有 26 个工具，但每次调用不需要全部传给 LLM。系统用中文关键词预匹配：
+Schedule Agent 拥有 29 个工具，但每次调用不需要全部传给 LLM。路由集中在
+`app/services/intent.py`（单一权威）：同义词扩展 + 评分匹配，而非写死的精确关键词。
 
 ```python
-"create_reminder": ["提醒", "新建提醒", "remind", "设个提醒", "别忘了"],
-"get_chaoxing_assignments": ["作业", "assignment", "任务", "截止"],
+# intent.py：同义词加性扩展（变体 → 规范词）
+SYNONYMS = {
+    "提醒": ["待办", "todo", "事项", "记一下"],
+    "刷新": ["扫描", "同步", "重新拉", "refresh"],
+    "系统": ["状态", "内存", "ram", "磁盘", "health"],
+}
+# 工具关键词引用规范词，按命中数评分；>0 入选，全不中才回退全集
+TOOL_KEYWORDS = {"create_reminder": ["创建", "提醒"], ...}
 ```
 
-用户说"帮我建个提醒"，只有提醒相关工具被传入 LLM，其他 20+ 个工具不占 token。始终包含 `get_schedule_context` 作为基础上下文。
+用户说"帮我建个提醒"或"同步一下学习通"，只有相关工具被传入 LLM，其余不占
+token。始终包含 `get_schedule_context` 作为基础上下文。同义词扩展让"同步""内存
+占用"等口语说法也能正确路由（旧的精确关键词会漏）。
 
 ### 3. Context Hash 优化 — 无变化时跳过 LLM
 
@@ -384,7 +393,8 @@ backend/app/
 ├── services/                  # 业务逻辑层
 │   ├── agent_service.py       # 通用 Agent 循环（tool call 执行）
 │   ├── api_service.py         # LLM API 客户端（OpenAI/Anthropic/Gemini）
-│   ├── schedule_agent.py      # Schedule Agent（26 个工具 + 关键词路由）
+│   ├── schedule_agent.py      # Schedule Agent（29 个工具 + 意图路由）
+│   ├── intent.py              # 意图路由（同义词扩展 + 评分）
 │   ├── provider_registry.py   # 提供商注册 + 解析
 │   ├── pricing_service.py     # OpenRouter 定价获取（24h 缓存）
 │   ├── chaoxing_service.py    # 学习通 API 客户端
@@ -394,7 +404,7 @@ backend/app/
 ├── tasks/                     # 后台定时任务
 │   ├── scheduler.py           # APScheduler 调度器
 │   ├── standby_agent.py       # Standby Agent（15分钟轮询）
-│   ├── chaoxing_sync.py       # 学习通同步（5分钟）
+│   ├── chaoxing_sync.py       # 学习通同步（信号驱动自适应 45s–900s）
 │   ├── health_monitor.py      # 系统健康监控
 │   └── notification_sender.py # 定时通知发送
 │
@@ -493,7 +503,7 @@ frontend/src/
 | `VAPID_MAILTO` | `mailto:admin@example.com` | VAPID 联系邮箱 |
 | `DINGTALK_AES_KEY` | `9f6ac1b97a9021bd` | 钉钉数据库解密密钥 |
 | `DINGTALK_SELF_UID` | — | 你自己的钉钉 UID |
-| `CHAOXING_SYNC_INTERVAL` | `300` | 学习通同步间隔（秒） |
+| `CHAOXING_SYNC_INTERVAL` | `300` | （已弃用）同步节奏现由信号驱动自适应决定，硬上界 900s |
 | `DEBUG` | `false` | 调试模式 |
 
 ---

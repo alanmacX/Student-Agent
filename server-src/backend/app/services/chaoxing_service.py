@@ -1205,25 +1205,6 @@ class ChaoxingService:
             )
             await db.commit()
 
-    async def _next_interval_from_activity(self, db_path: str, now: datetime) -> float:
-        async with aiosqlite.connect(db_path) as db:
-            row = await (await db.execute("""
-                SELECT MAX(updated_at) FROM chaoxing_conversation_sync
-            """)).fetchone()
-        last_dt = None
-        if row and row[0]:
-            try:
-                last_dt = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
-                if last_dt.tzinfo is None:
-                    last_dt = last_dt.replace(tzinfo=timezone.utc)
-            except Exception:
-                last_dt = None
-        if last_dt and now - last_dt <= timedelta(hours=1):
-            return random.uniform(60, 120)
-        if last_dt and now - last_dt <= timedelta(hours=6):
-            return random.uniform(120, 300)
-        return random.uniform(300, 600)
-
     async def _filter_changed_probes(self, probes: list[dict], db_path: str) -> list[str]:
         async with aiosqlite.connect(db_path) as db:
             changed = []
@@ -1261,33 +1242,3 @@ class ChaoxingService:
                 (str(count),),
             )
             await db.commit()
-
-    def _in_important_window(self, assignments: list[dict]) -> bool:
-        """Check if any assignment is due within 1 hour. Accepts pre-fetched assignments."""
-        now = datetime.now(tz=timezone.utc)
-        for a in assignments:
-            try:
-                due_str = a.get("dueDate")
-                if not due_str:
-                    continue
-                due = datetime.fromisoformat(due_str)
-                if due.tzinfo is None:
-                    due = due.replace(tzinfo=timezone.utc)
-                if 0 < (due - now).total_seconds() <= 3600:
-                    return True
-            except Exception:
-                pass
-        return False
-
-    def _next_interval(self, consecutive_no_change: int, in_important_window: bool) -> float:
-        if in_important_window:
-            return 45.0
-        if consecutive_no_change >= 12:
-            return 600.0
-        if consecutive_no_change >= 8:
-            return 300.0
-        if consecutive_no_change >= 4:
-            return 180.0
-        if consecutive_no_change >= 2:
-            return 90.0
-        return 45.0
