@@ -1149,6 +1149,10 @@ class ChaoxingService:
         probes = await self.fetch_conversation_probes()
         changed_ids = await self._filter_changed_probes(probes, db_path)
 
+        # Expose this tick's change count so the probe pipeline (chaoxing_sync)
+        # can skip the expensive LLM extraction when no conversation changed (P4).
+        self._last_sync_changed = len(changed_ids)
+
         if changed_ids:
             await self.fetch_recent_messages(changed_conversation_ids=changed_ids)
             consecutive_no_change = 0

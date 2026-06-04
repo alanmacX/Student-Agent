@@ -106,7 +106,7 @@ mem_entries = await repo.query_for_agent(now, user_message=user_message, max_tie
 | **P1** | R1+R2 `compute_sync_interval` 信号驱动 | 低 | 夜间不空转、多源加速 | ✅ 已上线+验证 |
 | **P2** | R3+R4 增量/定向刷新 | 中 | 降成本降延迟 | ✅ 已上线 |
 | **P3** | A2 意图归一(非LLM) | 中 | 路由更准 | ✅ 已上线 |
-| **P4** | A3 管线事件化 | 高 | 架构弹性 | ⬜ 待做 |
+| **P4** | A3 管线门控（轻量版，非事件总线） | 中 | 空闲不空跑 LLM | ✅ 已上线 |
 
 ### P0 实现（已上线）
 `build_turn_context(..., user_message=user_message)` 透传，`query_for_agent` 收到真实消息，
@@ -148,6 +148,19 @@ Layer B(tier2 关键词上下文)生效。线上实测：空消息只注入 1 �
   「加个组会」(加个→创建/组会→会议) 旧版都漏，新版命中。
 - 代价：共享概念(如「删除」)会带出兄弟工具，轻微过包含，仅多耗 LLM 输入
   token、不影响正确性。后续可叠加 LLM 路由(设计 P3 step2)而不改调用点。
+
+### P4 实现（轻量版，已上线）
+不引入事件总线（高风险），而是把直线管线规范成"输入真变了才跑"的门控：
+- `adaptive_sync_pass` 设 `self._last_sync_changed = len(changed_ids)`，把本 tick
+  的会话变化数暴露给 probe（非破坏，返回值仍是 float）。
+- `run_chaoxing_probe_adaptive`：
+  - Step 1 memory_sync 仍每 tick 跑（无 LLM，便宜），并算出 `memory_changed`。
+  - Step 2 LLM 抽取 **GATED**：仅当 `messages_changed>0` 才跑——空闲/夜间 tick
+    直接跳过整段 fetch+filter+LLM。作业变化由 Step 1 + deadline_check 兜底，跳过安全。
+  - Step 3 briefing：仅当 message/memory/new_entry 任一变化才调用（且自带签名门控）。
+  - provider 只解析一次，供两段 LLM 步骤复用。
+- 完整事件总线（ChangeEvent + 优先级队列 + 通知预算）作为未来项保留，当前直线
+  门控已拿到"空闲不空跑"的主要收益。
 
 ---
 
