@@ -208,10 +208,16 @@ async def _build_daily_begin_context(app_state, now: datetime) -> dict:
             ORDER BY is_important DESC, due_at ASC LIMIT 12
         """, (start.isoformat(), end.isoformat()))).fetchall()
         memory = await (await db.execute("""
-            SELECT title, summary, action_hint, importance FROM chaoxing_memory_entries
-            WHERE archived_at IS NULL AND importance IN ('high','medium')
-            AND (expires_at IS NULL OR expires_at > ?)
-            ORDER BY CASE importance WHEN 'high' THEN 1 ELSE 2 END, COALESCE(updated_at, extracted_at, sent_at) DESC
+            SELECT m.title, m.summary, m.action_hint, m.importance FROM chaoxing_memory_entries m
+            WHERE m.archived_at IS NULL AND m.importance IN ('high','medium')
+            AND (m.expires_at IS NULL OR m.expires_at > ?)
+            AND NOT EXISTS (
+                SELECT 1 FROM notification_log n
+                WHERE n.item_id = m.id
+                AND n.device_received_at IS NOT NULL
+                AND n.dismissed_at IS NULL
+            )
+            ORDER BY CASE m.importance WHEN 'high' THEN 1 ELSE 2 END, COALESCE(m.updated_at, m.extracted_at, m.sent_at) DESC
             LIMIT 5
         """, (now.isoformat(),))).fetchall()
         scheduled = await (await db.execute("""

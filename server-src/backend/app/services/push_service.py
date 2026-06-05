@@ -97,9 +97,29 @@ async def log_notification_sent(db_path: str, item_id: str, notif_type: str,
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
             "INSERT OR IGNORE INTO notification_log (item_id, notif_type, sent_at, push_title, push_body) VALUES (?,?,?,?,?)",
-            (item_id, notif_type, datetime.utcnow().isoformat(), title, body),
+            (item_id, notif_type, datetime.now(timezone.utc).isoformat(), title, body),
         )
         await db.commit()
+
+
+async def entity_recently_notified(db_path: str, item_id: str, within_hours: int = 24) -> bool:
+    """Cross-channel suppression: was this entity pushed via ANY channel recently?
+
+    ``has_notified`` is keyed by (item_id, notif_type), so each channel
+    (memory_high / standby_agent / daily_*) has its own dedup namespace and the
+    same real-world item can be pushed once per channel. This checks item_id
+    regardless of notif_type so a thing already surfaced by one channel isn't
+    immediately re-surfaced by another.
+    """
+    if not item_id:
+        return False
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=within_hours)).isoformat()
+    async with aiosqlite.connect(db_path) as db:
+        row = await (await db.execute(
+            "SELECT 1 FROM notification_log WHERE item_id=? AND sent_at > ? LIMIT 1",
+            (item_id, cutoff),
+        )).fetchone()
+    return row is not None
 
 
 async def has_notified(db_path: str, item_id: str, notif_type: str) -> bool:

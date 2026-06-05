@@ -251,7 +251,14 @@ class MemoryRepository:
         return row[0] if row else 0
 
     async def sweep(self, now: datetime, cap: int = 120) -> dict:
-        """Archive expired entries and trim active count to cap."""
+        """Delete expired entries, trim active count to cap, and clean up the
+        ``memory_topic_index`` rows that those deletes orphan.
+
+        (Despite the historical name this hard-deletes rather than archiving —
+        the table is a rolling cache, not an audit log. The orphan cleanup
+        matters: ``_index_entity``/``_update_topic_index`` only ever insert, so
+        without this the index grows unbounded and pollutes context matching.)
+        """
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         deleted_expired = trimmed = 0
@@ -282,8 +289,15 @@ class MemoryRepository:
                     (excess,),
                 )
                 trimmed = excess
+            # Cascade: drop topic-index rows whose memory entry no longer exists.
+            idx = await db.execute(
+                f"""DELETE FROM memory_topic_index
+                    WHERE memory_id NOT IN (SELECT id FROM {_TABLE})"""
+            )
+            orphans_cleaned = idx.rowcount
             await db.commit()
-        return {"deleted_expired": deleted_expired, "trimmed": trimmed}
+        return {"deleted_expired": deleted_expired, "trimmed": trimmed,
+                "topic_index_orphans_cleaned": orphans_cleaned}
 
     # ── Read ──────────────────────────────────────────────────────────────────
 

@@ -40,8 +40,11 @@ async def _compute_context_hash(db_path: str) -> str:
         r2 = await (await db.execute(
             "SELECT MAX(updated_at) FROM chaoxing_memory_entries WHERE archived_at IS NULL"
         )).fetchone()
+        # Exclude our OWN pushes: standby's send writes notification_log, which
+        # would otherwise advance MAX(sent_at) every run, change the hash, and
+        # defeat the skip — a self-feeding loop that re-pushes every 15 min.
         r3 = await (await db.execute(
-            "SELECT MAX(sent_at) FROM notification_log"
+            "SELECT MAX(sent_at) FROM notification_log WHERE notif_type != 'standby_agent'"
         )).fetchone()
     # Include system metrics in hash so *meaningful* health changes trigger
     # re-evaluation — but bucket them, otherwise the raw per-run jitter in
@@ -150,13 +153,20 @@ async def _build_context(db_path: str, now: datetime) -> str:
             LIMIT 10
         """)).fetchall()
 
-        # High/medium memory entries (not archived, not expired)
+        # High/medium memory entries (not archived, not expired). Exclude
+        # anything already pushed via ANY channel in the last 24h so standby
+        # doesn't re-nag what memory_high / daily already surfaced.
         memory_rows = await (await db.execute("""
             SELECT id, title, action_hint, importance, sent_at
-            FROM chaoxing_memory_entries
+            FROM chaoxing_memory_entries e
             WHERE importance IN ('high', 'medium')
             AND archived_at IS NULL
             AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
+            AND NOT EXISTS (
+                SELECT 1 FROM notification_log n
+                WHERE n.item_id = e.id
+                AND datetime(n.sent_at) > datetime('now', '-24 hours')
+            )
             ORDER BY CASE importance WHEN 'high' THEN 0 ELSE 1 END, extracted_at DESC
             LIMIT 5
         """)).fetchall()
@@ -251,6 +261,30 @@ def _fmt_due(due_str: str | None, now: datetime) -> str:
         return ""
 
 
+def _norm_title(t: str) -> str:
+    import re
+    return re.sub(r"[\s　，。、！!？?：:；;…·\-—]+", "", (t or "")).lower()
+
+
+async def _recently_pushed_title(db_path: str, title: str, hours: int = 6) -> bool:
+    """True if a standby push with the same normalized title went out recently.
+
+    Defends against the LLM re-surfacing the same unresolved item every cycle
+    with a new item_id and slightly reworded body.
+    """
+    nt = _norm_title(title)
+    if not nt:
+        return False
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    async with aiosqlite.connect(db_path) as db:
+        rows = await (await db.execute(
+            "SELECT push_title FROM notification_log "
+            "WHERE notif_type='standby_agent' AND sent_at > ?",
+            (cutoff,),
+        )).fetchall()
+    return any(_norm_title(r[0]) == nt for r in rows)
+
+
 # ── Tool executor ─────────────────────────────────────────────────────────────
 
 async def _execute_standby_tool(tc: ToolCall, db_path: str, now: datetime) -> tuple[str, str, str | None]:
@@ -272,6 +306,13 @@ async def _execute_standby_tool(tc: ToolCall, db_path: str, now: datetime) -> tu
 
         # Dedup: don't push same item twice with standby_agent type
         if await has_notified(db_path, item_id, "standby_agent"):
+            return "no_action", None, None
+
+        # Topic cooldown: the LLM mints a fresh item_id every run for the *same*
+        # real-world thing (and tweaks the wording), so item_id dedup never hits
+        # and the user gets nagged every cycle. Suppress if we already pushed a
+        # standby notification with the same normalized title in the last 6h.
+        if await _recently_pushed_title(db_path, title, hours=6):
             return "no_action", None, None
 
         await send_push_to_all_subscribers(

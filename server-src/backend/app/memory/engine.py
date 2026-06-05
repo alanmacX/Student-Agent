@@ -129,9 +129,10 @@ async def _build_context(msg: NormalisedMessage, db_path: str, now: datetime) ->
                    FROM memory_topic_index t
                    JOIN chaoxing_memory_entries m ON m.id = t.memory_id
                    WHERE m.archived_at IS NULL
-                     AND (? LIKE '%'||t.entity_key||'%' OR t.entity_key LIKE '%'||substr(?,1,6)||'%')
+                     AND length(t.entity_key) >= 4
+                     AND ? LIKE '%'||t.entity_key||'%'
                    LIMIT 5""",
-                (text_sample, text_sample),
+                (text_sample,),
             )).fetchall()
             if topic_hits:
                 lines.append("相关条目: " + " | ".join(
@@ -343,11 +344,17 @@ def _merge_effects(plans: list[list[Effect]]) -> list[Effect]:
         # Merge into single notification
         titles = [e.params.get("title", "") for e in push_nows]
         bodies = [e.params.get("body", "") for e in push_nows]
+        # Preserve a stable identity: combine the source entity_keys so the
+        # merged push gets a deterministic item_id (dedup survives reprocessing)
+        # instead of falling back to a content hash that changes if wording does.
+        keys = [e.params.get("entity_key") or e.params.get("dedupe_key") for e in push_nows]
+        merged_key = "+".join(sorted(k for k in keys if k)) or None
         merged_push = Effect(
             type=EffectType.PUSH_NOW,
             params={
                 "title": titles[0],
                 "body": " | ".join(b for b in bodies if b),
+                **({"entity_key": merged_key} if merged_key else {}),
             },
             priority=max(e.priority for e in push_nows),
         )
@@ -523,20 +530,23 @@ def _normalise_key(text: str) -> str:
 
 
 def _expand_entity_keys(name: str) -> list[str]:
-    """Generate multiple index keys for fuzzy matching."""
+    """Generate index keys for fuzzy matching.
+
+    Deliberately does NOT emit 2-char bigrams: those matched almost any Chinese
+    message in the LIKE-based context lookup and flooded "相关条目" with
+    unrelated memories. Keep only high-signal keys — the full normalized name,
+    each whole CJK chunk, and ASCII words.
+    """
     keys: list[str] = []
     base = _normalise_key(name)
     if base:
         keys.append(base)
-    # CJK substrings of length 2+
     import re
     cjk = re.findall(r'[一-鿿]+', name)
     for chunk in cjk:
-        keys.append(_normalise_key(chunk))
-        if len(chunk) > 2:
-            for i in range(len(chunk) - 1):
-                bi = chunk[i:i+2]
-                keys.append(_normalise_key(bi))
+        nk = _normalise_key(chunk)
+        if len(nk) >= 2:
+            keys.append(nk)
     # ASCII words 3+ chars
     ascii_words = re.findall(r'[a-zA-Z]{3,}', name)
     for w in ascii_words:
@@ -638,4 +648,10 @@ def _is_obvious_noise(text: str) -> bool:
         return True
     NOISE = {"好的", "谢谢", "收到", "知道了", "ok", "嗯", "嗯嗯", "test",
               "好", "是的", "对", "明白", "晓得", "了解", "稍等", "好滴"}
-    return clean.strip().lower() in NOISE
+    c = clean.strip().lower()
+    if c in NOISE:
+        return True
+    # Doubled acknowledgements ("收到收到", "好的好的") are still pure noise.
+    if len(c) % 2 == 0 and c[: len(c) // 2] == c[len(c) // 2:] and c[: len(c) // 2] in NOISE:
+        return True
+    return False
