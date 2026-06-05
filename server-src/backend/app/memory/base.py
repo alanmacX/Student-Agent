@@ -40,6 +40,10 @@ def compute_tier(
 ) -> int:
     if expires_at:
         days_left = (expires_at - now).total_seconds() / 86400
+        if days_left <= 0:
+            # Already past its deadline — not urgent, just stale. Don't let it
+            # rank as CRITICAL; it will be swept out shortly.
+            return Tier.REFERENCE
         if days_left <= 1:
             return Tier.CRITICAL
         if days_left <= 7 and for_automation:
@@ -104,7 +108,16 @@ class MemoryRepository:
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
 
-        expires_at = entry.expires_at or (now + timedelta(days=14))
+        # Default expiry. Automation-eligible entries with no explicit deadline
+        # get a SHORT fallback so a notice the LLM forgot to bound doesn't linger
+        # for two weeks being re-surfaced as a to-do every day; passive context
+        # entries keep the long 14-day window.
+        if entry.expires_at:
+            expires_at = entry.expires_at
+        elif entry.for_automation:
+            expires_at = now + timedelta(days=3)
+        else:
+            expires_at = now + timedelta(days=14)
         content_time = entry.content_time
         tier = entry.hierarchy_tier
         ni = now.isoformat()

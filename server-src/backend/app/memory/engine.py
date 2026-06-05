@@ -166,6 +166,13 @@ Effect 类型说明：
 - upsert_memory: 新建或更新记忆条目
   params: {title, summary, action_hint, importance(high/medium/low),
            entity_key(索引键), expires_iso, for_automation(bool), category}
+  ⚠️ expires_iso 规则（务必遵守）：
+    · 有明确截止/考试/上课时间的事项 → expires_iso 必须**等于那个真实时间**，
+      不要往后留缓冲、不要凑整到周末或月底。截止过了条目就该自然失效。
+    · 没有明确时间的一般通知/背景信息 → expires_iso 留空或给一个**近期**
+      （最多 3 天）的值，不要给两周后这种远期，否则会被反复当作待办推送。
+    · 已经过去的事（截止时间早于当前时间）→ 不要 for_automation，expires_iso
+      就设成那个已过去的时间（让它立即失效），不要续命。
 - archive_memory: 软删除匹配的记忆条目
   params: {entity_key, reason}
 - push_now: 立即推送
