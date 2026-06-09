@@ -181,15 +181,15 @@ function App() {
           <button
             key={id}
             onClick={() => handleTabChange(id)}
-            className={`flex h-9 items-center gap-2 rounded-full px-3 text-xs font-medium transition ${
+            className={`flex h-9 items-center gap-1.5 rounded-full px-3 font-medium transition-all duration-200 ${
               tab === id
-                ? "bg-white/14 text-white shadow-sm"
-                : "text-[var(--text-tertiary)] hover:bg-white/8 hover:text-white"
+                ? "bg-white/14 text-white shadow-sm text-xs"
+                : "text-[var(--text-tertiary)] hover:bg-white/8 hover:text-white text-[11px]"
             }`}
             title={label}
           >
-            <Icon size={18} />
-            {id === tab && <span>{label}</span>}
+            <Icon size={tab === id ? 15 : 14} />
+            <span>{label}</span>
           </button>
         ))}
       </div>

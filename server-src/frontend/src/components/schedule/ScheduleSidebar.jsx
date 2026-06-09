@@ -99,14 +99,19 @@ export default function ScheduleSidebar({ mobile = false }) {
           assignments.map((a) => {
             const color = deadlineColor(a.dueDate);
             const countdown = formatCountdown(a.dueDate);
+            const isUrgent = a.dueDate && (new Date(a.dueDate) - Date.now()) < 24 * 3600 * 1000;
             return (
-              <div key={a.id} className="px-3 py-2 border-b border-[var(--border)] last:border-0">
-                <p className="text-sm leading-5 text-[var(--text-secondary)]">{a.title}</p>
-                <div className="mt-0.5 flex items-center gap-2">
-                  <span className="text-xs text-[var(--text-tertiary)] truncate">{a.courseName}</span>
+              <div
+                key={a.id}
+                className={`px-3 py-2.5 border-b border-[var(--border)] last:border-0 transition-colors hover:bg-[var(--hover-bg)] ${isUrgent ? "bg-orange-500/5" : ""}`}
+                title={`${a.title}${a.courseName ? ` · ${a.courseName}` : ""}${countdown ? ` · ${countdown}` : ""}`}
+              >
+                <p className="text-[13px] leading-5 text-[var(--text-secondary)] truncate">{a.title}</p>
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="text-xs text-[var(--text-tertiary)] truncate min-w-0 flex-1">{a.courseName}</span>
                   {countdown && (
-                    <span className={`ml-auto flex shrink-0 items-center gap-0.5 text-[11px] font-medium ${color}`}>
-                      <Clock size={10} />
+                    <span className={`flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${color} ${isUrgent ? "bg-orange-500/12 ring-1 ring-orange-500/20" : ""}`}>
+                      <Clock size={9} />
                       {countdown}
                     </span>
                   )}
@@ -145,14 +150,15 @@ export default function ScheduleSidebar({ mobile = false }) {
             <button
               key={m.id}
               onClick={() => setSelectedMemory(m)}
-              className="w-full text-left px-3 py-2 border-b border-[var(--border)] last:border-0 hover:bg-[var(--hover-bg)] transition-colors"
+              title={m.title}
+              className="w-full text-left px-3 py-2.5 border-b border-[var(--border)] last:border-0 hover:bg-[var(--hover-bg)] transition-colors"
             >
-              <div className="flex items-center gap-1.5">
-                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.importance === "high" ? "bg-red-500" : "bg-yellow-500"}`} />
-                <p className="text-sm text-[var(--text-secondary)] truncate">{m.title}</p>
+              <div className="flex items-center gap-2">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${m.importance === "high" ? "bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.5)]" : "bg-yellow-500"}`} />
+                <p className="text-[13px] font-medium text-[var(--text-secondary)] truncate">{m.title}</p>
               </div>
-              {m.summary && <p className="ml-3 text-xs text-[var(--text-tertiary)] line-clamp-2">{m.summary}</p>}
-              {m.action_hint && <p className="ml-3 mt-0.5 text-xs text-[var(--accent-soft)]">{m.action_hint}</p>}
+              {m.summary && <p className="ml-4 mt-0.5 text-xs text-[var(--text-tertiary)] line-clamp-2 leading-relaxed">{m.summary}</p>}
+              {m.action_hint && <p className="ml-4 mt-1 text-xs text-[var(--accent-soft)] leading-relaxed">{m.action_hint}</p>}
             </button>
           ))
         ) : (
@@ -232,11 +238,11 @@ function Section({ sectionKey, icon: Icon, title, count, collapsed, onToggle, ac
     <section className="overflow-hidden rounded-[20px] border border-[var(--border)] bg-[var(--surface)]">
       <button
         onClick={() => onToggle(sectionKey)}
-        className="flex w-full items-center justify-between rounded-t-[20px] px-3.5 py-2.5 transition-colors hover:bg-[var(--hover-bg)]"
+        className="flex w-full items-center justify-between rounded-t-[20px] px-3.5 py-3 transition-colors hover:bg-[var(--hover-bg)]"
       >
         <div className="flex items-center gap-2">
-          <Icon size={14} className="text-[var(--text-tertiary)]" />
-          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">{title}</span>
+          <Icon size={13} className="text-[var(--text-tertiary)]" />
+          <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-tertiary)]">{title}</span>
           {count > 0 && (
             <span className="rounded-full bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-tertiary)]">
               {count}
