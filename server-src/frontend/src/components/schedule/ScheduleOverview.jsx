@@ -120,8 +120,8 @@ export default function ScheduleOverview() {
 
   return (
     <div className="h-full overflow-y-auto bg-[var(--panel-bg)]">
-      {/* Header — island, width-matched to content */}
-      <div className="sticky top-0 z-10 mx-auto flex w-full max-w-3xl items-center justify-between gap-2 px-3 pt-3 pb-1 lg:px-6">
+      {/* Header — island, width-matched to content (widens to 6xl on xl) */}
+      <div className="sticky top-0 z-10 mx-auto flex w-full max-w-3xl items-center justify-between gap-2 px-3 pt-3 pb-1 lg:px-6 xl:max-w-6xl">
         <div className="glass-pill flex min-h-[48px] items-center rounded-full px-5 py-2">
           <h1 className="text-sm font-semibold text-white">日程总览</h1>
         </div>
@@ -134,18 +134,29 @@ export default function ScheduleOverview() {
         </button>
       </div>
 
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 pb-40 md:pb-6 lg:p-6 lg:pb-10">
-        <TodayCard
-          data={data}
-          loading={loading}
-          pendingCount={pendingAssignments.length}
-          onRefreshBriefing={handleRefreshBriefing}
-          refreshingBriefing={refreshingBriefing}
-        />
-        <StatusStrip />
-        <TokenSummary />
+      {/* On xl screens: 2-column — hero+status on the left, week schedule on the
+          right, so the wide canvas is used instead of a narrow centered column.
+          Below xl it collapses to the original single column. */}
+      <div className="mx-auto w-full max-w-3xl p-3 pb-40 md:pb-6 lg:p-6 lg:pb-10 xl:max-w-6xl">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,440px)_minmax(0,1fr)] xl:items-start">
+          {/* Left column */}
+          <div className="flex flex-col gap-4 xl:sticky xl:top-3">
+            <TodayCard
+              data={data}
+              loading={loading}
+              pendingCount={pendingAssignments.length}
+              onRefreshBriefing={handleRefreshBriefing}
+              refreshingBriefing={refreshingBriefing}
+            />
+            <StatusStrip />
+            <TokenSummary />
+          </div>
 
-        <ScheduleSection courses={courses} events={data?.week_events || data?.events || []} />
+          {/* Right column */}
+          <div className="flex flex-col gap-4">
+            <ScheduleSection courses={courses} events={data?.week_events || data?.events || []} />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -470,13 +481,13 @@ function WeekTable({ courses, events }) {
   ];
   return (
     <div className="overflow-x-auto">
-      <div className="min-w-[760px] overflow-hidden rounded-2xl border border-[var(--border)]">
-        <div className="grid grid-cols-[38px_repeat(7,minmax(94px,1fr))] border-b border-[var(--border)] bg-[var(--deep-bg)]">
+      <div className="min-w-[680px] overflow-hidden rounded-2xl border border-[var(--border)]">
+        <div className="grid grid-cols-[40px_repeat(7,minmax(80px,1fr))] border-b border-[var(--border)] bg-[var(--deep-bg)]">
           <Cell muted>节</Cell>
           {WEEKDAYS.map((day) => <Cell key={day.value} muted>{day.label}</Cell>)}
         </div>
         {PERIODS.map((period) => (
-          <div key={period.id} className="grid min-h-[64px] grid-cols-[38px_repeat(7,minmax(94px,1fr))] border-b border-[var(--border)] last:border-b-0">
+          <div key={period.id} className="grid min-h-[64px] grid-cols-[40px_repeat(7,minmax(80px,1fr))] border-b border-[var(--border)] last:border-b-0">
             <Cell muted>{period.label}</Cell>
             {WEEKDAYS.map((day) => (
               <div key={day.value} className="min-h-[64px] border-l border-[var(--border)] p-1.5">

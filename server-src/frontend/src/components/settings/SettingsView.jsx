@@ -1,18 +1,16 @@
 import { useState } from "react";
-import { Key, Bell, LogIn, Database, MessageCircle, Coins, Bot } from "lucide-react";
+import { Key, Bell, LogIn, Database, MessageCircle, Coins } from "lucide-react";
 import ProviderSettings from "./ProviderSettings";
 import PushSettings from "./PushSettings";
 import ChaoxingStatus from "../schedule/ChaoxingStatus";
 import DataPanel from "./DataPanel";
 import DingTalkStatus from "./DingTalkStatus";
 import TokenStats from "../hub/TokenStats";
-import MaiMBotStatus from "./MaiMBotStatus";
 
 const TABS = [
   { id: "providers", label: "API Keys", mobileLabel: "API", icon: Key },
   { id: "chaoxing", label: "Chaoxing", mobileLabel: "学习通", icon: LogIn },
   { id: "dingtalk", label: "钉钉", mobileLabel: "钉钉", icon: MessageCircle },
-  { id: "maimbot", label: "MaiMBot", mobileLabel: "Bot", icon: Bot },
   { id: "push", label: "Push", mobileLabel: "推送", icon: Bell },
   { id: "tokens", label: "用量统计", mobileLabel: "用量", icon: Coins },
   { id: "data", label: "数据管理", mobileLabel: "数据", icon: Database },
@@ -48,7 +46,6 @@ export default function SettingsView() {
         {tab === "providers" && <ProviderSettings />}
         {tab === "chaoxing" && <ChaoxingStatus />}
         {tab === "dingtalk" && <DingTalkStatus />}
-        {tab === "maimbot" && <MaiMBotStatus />}
         {tab === "push" && <PushSettings />}
         {tab === "tokens" && <TokenStats />}
         {tab === "data" && <DataPanel />}
