@@ -155,14 +155,23 @@ function StatusTab({ status, loggedIn, onSync, onResume, onRefresh, syncing, res
 
   if (loading) return <div className="py-12 text-center"><Loader2 size={24} className="mx-auto animate-spin text-[var(--text-tertiary)]" /></div>;
 
-  // Not-logged-in state — show QR panel
+  // Not-logged-in (incl. session gone stale) — show QR panel. A previously
+  // synced account that's now logged out means the session expired, so label it
+  // "登录已失效" rather than the first-time "未登录".
+  const everSynced = (status?.total_messages ?? 0) > 0 || status?.last_sync;
   if (!loggedIn) return (
     <div className="space-y-4">
       <div className="flex items-center gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
         <AlertCircle size={20} className="shrink-0 text-amber-400" />
         <div>
-          <p className="text-sm font-medium text-amber-300">钉钉未登录</p>
-          <p className="text-xs text-[var(--text-tertiary)]">扫码登录后即可开始监听消息</p>
+          <p className="text-sm font-medium text-amber-300">
+            {everSynced ? "钉钉登录已失效" : "钉钉未登录"}
+          </p>
+          <p className="text-xs text-[var(--text-tertiary)]">
+            {everSynced
+              ? `消息库已 ${fmtAge(status?.wal_age_seconds)}无更新，请用手机重新扫码登录`
+              : "扫码登录后即可开始监听消息"}
+          </p>
         </div>
       </div>
       <button onClick={() => setShowQR(v => !v)}
