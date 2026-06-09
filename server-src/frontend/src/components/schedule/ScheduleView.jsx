@@ -288,7 +288,7 @@ export default function ScheduleView() {
         return prev;
       });
     },
-    onPendingConfirm: (event) => {
+    onPendingConfirmation: (event) => {
       const pending = {
         tool: event.tool,
         arguments: event.arguments,
