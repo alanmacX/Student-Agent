@@ -24,14 +24,13 @@ export default function TabBar({ active, onChange, onRefresh }) {
 
   return (
     <div
-      className="md:hidden"
+      className="flex md:hidden"
       style={{
         position: "fixed",
         bottom: "calc(env(safe-area-inset-bottom) + 6px)",
         left: "50%",
         transform: "translateX(-50%)",
         zIndex: 50,
-        display: "flex",
         alignItems: "center",
         gap: "8px",
       }}
