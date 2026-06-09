@@ -82,8 +82,20 @@ TOOL_KEYWORDS: dict[str, list[str]] = {
     "set_push_config":               ["静默", "免打扰", "推送设置", "推送配置", "间隔", "quiet"],
 }
 
-# Always available regardless of score — the agent's bread-and-butter read.
-ALWAYS_INCLUDE = {"get_schedule_context"}
+# Always available regardless of score. Beyond the bread-and-butter read,
+# reminder (待办) CRUD is ALWAYS included: users frequently describe tasks in one
+# turn ("我今天有三件事…") and confirm in the next ("对的"), neither of which
+# carries a routing keyword — keyword-gating these away left the agent unable to
+# create todos, its single most-requested action. The token cost of 5 small
+# tool schemas is worth never silently losing write capability.
+ALWAYS_INCLUDE = {
+    "get_schedule_context",
+    "list_reminders",
+    "create_reminder",
+    "update_reminder",
+    "complete_reminder",
+    "delete_reminder",
+}
 
 
 def _normalize(text: str) -> str:

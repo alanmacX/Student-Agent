@@ -162,24 +162,29 @@ function App() {
         {/* Rounded card that contains BOTH the header and the content */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-[18px] border border-white/10 bg-[var(--panel-bg)] shadow-2xl shadow-black/30">
 
-          {/* Tab bar — lives inside the card, normal flow, never overlaps */}
-          <header className="flex h-11 shrink-0 items-center border-b border-[var(--border)] px-3">
-            {/* Segmented-control tray */}
-            <nav className="flex items-center gap-0.5 rounded-[10px] bg-[var(--surface)] p-[3px] border border-[var(--border)]">
-              {TABS.map(({ id, label, icon: Icon }) => (
-                <button
-                  key={id}
-                  onClick={() => handleTabChange(id)}
-                  className={`flex h-[26px] items-center gap-1.5 rounded-[7px] px-2.5 text-[12px] font-medium transition-all duration-200 ${
-                    tab === id
-                      ? "bg-[var(--panel-bg)] text-white shadow-sm shadow-black/20 border border-white/8"
-                      : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-                  }`}
-                >
-                  <Icon size={12} strokeWidth={tab === id ? 2.2 : 1.8} />
-                  <span>{label}</span>
-                </button>
-              ))}
+          {/* Tab bar — visionOS-style floating glass pill, centered. Lives in
+              the header row (normal flow) so it never overlaps content, but
+              shares the mobile bottom-bar's glass material + accent-active look. */}
+          <header className="flex h-[60px] shrink-0 items-center justify-center border-b border-[var(--border)] px-3">
+            <nav className="glass-tab flex items-center gap-1 rounded-full p-1.5">
+              {TABS.map(({ id, label, icon: Icon }) => {
+                const isActive = tab === id;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => handleTabChange(id)}
+                    style={{ transition: "all 0.42s var(--ease-spring)" }}
+                    className={`flex items-center gap-2 rounded-full px-4 py-2 text-[13px] ${
+                      isActive
+                        ? "bg-[var(--accent)] font-semibold text-white shadow-lg shadow-[color:var(--accent-ring)] scale-[1.04]"
+                        : "font-medium text-[var(--text-tertiary)] hover:bg-[var(--hover-bg)] hover:text-white active:scale-95"
+                    }`}
+                  >
+                    <Icon size={17} strokeWidth={isActive ? 2.4 : 1.9} />
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
             </nav>
           </header>
 

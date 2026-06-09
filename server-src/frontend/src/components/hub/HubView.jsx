@@ -38,16 +38,16 @@ export default function HubView() {
   return (
     <div className="relative flex h-full flex-col bg-[var(--panel-bg)]">
       {/* Floating header */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 mx-auto flex w-full max-w-3xl items-center justify-between gap-2 px-3 pt-3 md:px-6">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 mx-auto flex w-full max-w-3xl items-center justify-between gap-2 px-3 pt-3 md:px-6 xl:max-w-5xl">
         <div className="glass-pill pointer-events-auto flex min-h-[48px] items-center rounded-full px-5 py-2">
           <Lightbulb size={16} className="mr-2 text-yellow-400" />
           <h2 className="text-sm font-semibold text-white">Hub</h2>
         </div>
       </div>
 
-      {/* Scrollable content */}
+      {/* Scrollable content — single column on narrow, 2-column on xl */}
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-[72px] pb-36 md:pb-4 md:px-6">
-        <div className="mx-auto max-w-3xl space-y-4 stagger">
+        <div className="mx-auto grid max-w-3xl grid-cols-1 gap-4 stagger xl:max-w-5xl xl:grid-cols-2 xl:items-start">
 
           {/* Quick Capture */}
           <section className="surface-card animate-rise p-4">
