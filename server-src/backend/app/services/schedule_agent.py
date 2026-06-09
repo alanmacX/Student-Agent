@@ -1158,9 +1158,14 @@ async def _execute_schedule_tool(
 # second "确认吗?" made the assistant feel broken (user describes tasks → agent
 # offers → user says "对的" → agent STILL asks to confirm). Those just run now.
 _NEEDS_CONFIRMATION = {
+    "create_reminder",
+    "update_reminder",
     "delete_reminder",
+    "create_calendar_event",
+    "update_calendar_event",
     "delete_calendar_event",
-    "import_timetable",     # wipes + replaces the whole timetable
+    "import_timetable",      # wipes + replaces the whole timetable
+    "schedule_notification",
 }
 
 
@@ -1169,10 +1174,15 @@ def _require_confirmation(tool_name: str, user_message: str, arguments: dict) ->
         return None
     if is_confirmation_text(user_message):
         return None
-    # No JSON dump — agent should summarise in natural language
+    # The op is now QUEUED (界面会显示确认按钮). Tell the agent to keep queuing
+    # any further requested mutations, then ask for confirmation ONCE — so a
+    # "create 3 reminders" request collects all three before the buttons appear,
+    # instead of the agent stopping after the first.
     return (
-        "需要用户确认后才能执行此操作。"
-        "请用一句简短的中文描述将要做什么，结尾问用户是否确认执行，不要输出任何 JSON 或参数细节。"
+        "该操作已加入待确认队列（用户界面会显示「确认执行」按钮，无需用户打字）。"
+        "如果用户还要求了其他操作，请继续调用对应工具把它们也加入队列；"
+        "全部加入后，用一句简短中文说明将要执行哪些操作并提示用户点击确认，"
+        "不要输出任何 JSON 或参数细节。"
     )
 
 
@@ -1196,37 +1206,77 @@ def is_confirmation_text(user_message: str) -> bool:
 
 
 async def _store_pending_mutation(db_path: str, tool_name: str, arguments: dict) -> None:
+    """Append a mutation to the pending queue (a LIST).
+
+    Stored as a list so a single "create 3 reminders" turn produces 3 pending
+    items that one tap of 确认 executes together — the old single-slot store made
+    each new mutation clobber the previous one, so batches were impossible.
+    """
+    items = await get_pending_mutations(db_path)
+    items.append({"tool": tool_name, "arguments": arguments})
     await _set_setting(
-        db_path,
-        "schedule_pending_mutation",
-        json.dumps({"tool": tool_name, "arguments": arguments}, ensure_ascii=False),
+        db_path, "schedule_pending_mutation",
+        json.dumps(items, ensure_ascii=False),
     )
 
 
-async def execute_confirmed_pending_mutation(user_message: str, chaoxing_svc, db_path: str) -> dict | None:
-    if not is_confirmation_text(user_message):
-        return None
+async def get_pending_mutations(db_path: str) -> list[dict]:
     raw = await _get_setting(db_path, "schedule_pending_mutation")
     if not raw:
-        return None
+        return []
     try:
-        pending = json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError:
-        await _set_setting(db_path, "schedule_pending_mutation", None)
-        return {"text": "待确认操作已损坏，已清除，请重新发起。", "result": None}
+        return []
+    if isinstance(parsed, dict):       # back-compat with the old single form
+        return [parsed]
+    return parsed if isinstance(parsed, list) else []
+
+
+async def clear_pending_mutations(db_path: str) -> None:
+    await _set_setting(db_path, "schedule_pending_mutation", None)
+
+
+async def execute_pending_mutations(chaoxing_svc, db_path: str) -> dict:
+    """Run ALL queued pending mutations. Used by the confirm BUTTON (no text
+    gate) and by the typed-confirmation path. Returns {ok, result}."""
+    items = await get_pending_mutations(db_path)
+    if not items:
+        return {"ok": False, "result": "没有待确认的操作。"}
 
     from .agent_service import ToolCall
 
-    tc = ToolCall(id="confirmed_pending", name=pending.get("tool", ""), arguments=pending.get("arguments") or {})
-    result = await _execute_schedule_tool(tc, chaoxing_svc, db_path, user_message, None)
-    await _set_setting(db_path, "schedule_pending_mutation", None)
-    if result.startswith("错误:") or result.startswith("需要用户确认"):
-        return {"text": result, "result": None}
+    texts: list[str] = []
+    ok_any = False
+    for it in items:
+        tc = ToolCall(id="confirmed_pending", name=it.get("tool", ""),
+                      arguments=it.get("arguments") or {})
+        try:
+            # user_message="确认执行" satisfies is_confirmation_text so the tool's
+            # own _require_confirmation gate passes and it actually runs.
+            result = await _execute_schedule_tool(tc, chaoxing_svc, db_path, "确认执行", None)
+        except Exception as e:
+            texts.append(f"执行「{tc.name}」失败：{e}")
+            continue
+        if result.startswith("错误:") or result.startswith("需要用户确认"):
+            texts.append(result)
+        else:
+            ok_any = True
+            texts.append(_confirmed_result_text(tc.name, result))
 
-    return {
-        "text": _confirmed_result_text(tc.name, result),
-        "result": result,
-    }
+    await clear_pending_mutations(db_path)
+    return {"ok": ok_any, "result": "\n".join(texts) or "已完成。"}
+
+
+async def execute_confirmed_pending_mutation(user_message: str, chaoxing_svc, db_path: str) -> dict | None:
+    """Typed-confirmation path (user types "确认"). Button path uses
+    execute_pending_mutations directly via the /confirm endpoint."""
+    if not is_confirmation_text(user_message):
+        return None
+    if not await get_pending_mutations(db_path):
+        return None
+    res = await execute_pending_mutations(chaoxing_svc, db_path)
+    return {"text": res["result"], "result": res["result"]}
 
 
 async def detect_and_store_pending_mutation(user_message: str, db_path: str) -> str | None:

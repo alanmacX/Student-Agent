@@ -9,6 +9,8 @@ from datetime import datetime
 from app.database import db_conn
 from app.services.schedule_agent import (
     execute_confirmed_pending_mutation,
+    execute_pending_mutations,
+    clear_pending_mutations,
     run_schedule_agent,
 )
 from app.config import settings
@@ -221,6 +223,47 @@ async def _handle_slash_command(cmd: str, db_path: str, chaoxing_svc) -> tuple[s
 
     else:
         return f"未知命令: {cmd}\n\n可用命令: /status /scan /memory /push", None
+
+
+@router.post("/confirm")
+async def confirm_pending(request: Request):
+    """Button-driven confirm/cancel for pending mutations.
+
+    The chat UI's 「✓ 确认执行」/「取消」 buttons POST here. Previously this route
+    did not exist (404), so the only way to confirm an action was to *type*
+    "确认" — which is exactly why the confirm flow felt broken.
+    """
+    body = await request.json()
+    action = (body.get("action") or "confirm").strip()
+    session_id = body.get("session_id") or "default"
+    db_path = settings.database_path
+
+    if action == "cancel":
+        await clear_pending_mutations(db_path)
+        return {"ok": True, "result": "已取消操作。"}
+
+    chaoxing_svc = request.app.state.chaoxing_svc
+    res = await execute_pending_mutations(chaoxing_svc, db_path)
+    text = res.get("result") or "已完成。"
+
+    # Persist as an assistant message so it survives the post-confirm reload.
+    try:
+        async with db_conn() as db:
+            now = datetime.utcnow().isoformat()
+            await _ensure_session_exists(db, session_id, now)
+            pos_row = await (await db.execute(
+                "SELECT MAX(position) FROM schedule_messages WHERE session_id=?", (session_id,)
+            )).fetchone()
+            next_pos = (pos_row[0] or 0) + 1
+            await db.execute(
+                "INSERT INTO schedule_messages (id, session_id, role, content, timestamp, position) VALUES (?,?,?,?,?,?)",
+                (str(uuid.uuid4()), session_id, "assistant", text, now, next_pos),
+            )
+            await db.commit()
+    except Exception:
+        pass
+
+    return {"ok": res.get("ok", True), "result": text}
 
 
 @router.post("/chat")
