@@ -115,13 +115,30 @@ def plan_subagents(user_text: str) -> dict:
     return {"sub_agents": sub_agents[:4], "expects_mutation": expects_mutation}
 
 
+_AFFIRMATIVES = {
+    "好", "好的", "好啊", "对", "对的", "对啊", "是", "是的", "是啊",
+    "可以", "行", "行啊", "嗯", "嗯嗯", "确认", "没问题", "当然",
+    "ok", "okay", "yes", "yep", "sure", "确定", "同意", "我确认",
+}
+
+
 def filter_tool_names(user_text: str, available: list[str]) -> list[str]:
     """Return the subset of `available` tool names relevant to the message.
 
     Scored by synonym-expanded keyword overlap. Tools in ALWAYS_INCLUDE are
     always kept. If nothing matches at all, fall back to the full set so the
     agent is never left tool-less.
+
+    Special case: short affirmative replies ("对的", "好的", "ok" …) have no
+    content keywords, but the user is likely confirming a multi-turn action
+    the agent proposed in the previous turn (e.g. "要我帮你创建提醒吗?" → "对的").
+    In that case we must NOT strip the mutation tools — return the full set so
+    the agent can follow through on whatever the conversation context implies.
     """
+    msg = (user_text or "").strip().lower()
+    if msg in _AFFIRMATIVES or (len(msg) <= 6 and any(a in msg for a in _AFFIRMATIVES)):
+        return list(available)
+
     norm = _normalize(user_text)
     selected = [
         name for name in available

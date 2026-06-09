@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { PanelRight, Trash2, X, Upload, Plus, MessageSquare } from "lucide-react";
+import { PanelRight, PanelRightClose, Trash2, X, Upload, Plus, MessageSquare } from "lucide-react";
 import { useSSEStream } from "../../hooks/useSSEStream";
 import { useScheduleSessions } from "../../hooks/useScheduleSessions";
 import { apiFetch } from "../../api/client";
@@ -147,6 +147,7 @@ export default function ScheduleView() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(false);
   const [sessionsDrawerOpen, setSessionsDrawerOpen] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [agentStatus, setAgentStatus] = useState("处理中...");
@@ -532,8 +533,17 @@ export default function ScheduleView() {
           </div>
 
           {/* Floating circle action buttons */}
+          {/* Mobile: open drawer */}
           <CircleButton onClick={() => setSidebarOpen(true)} title="打开日程侧栏" className="lg:hidden">
             <PanelRight size={16} />
+          </CircleButton>
+          {/* Desktop: toggle right sidebar */}
+          <CircleButton
+            onClick={() => setDesktopSidebarOpen((v) => !v)}
+            title={desktopSidebarOpen ? "收起侧栏" : "展开侧栏"}
+            className="hidden lg:grid"
+          >
+            {desktopSidebarOpen ? <PanelRightClose size={16} /> : <PanelRight size={16} />}
           </CircleButton>
           <CircleButton onClick={() => setShowImport(true)} title="导入课程表">
             <Upload size={15} />
@@ -608,10 +618,12 @@ export default function ScheduleView() {
         />
       </div>
 
-      {/* Schedule sidebar — desktop */}
-      <div className="hidden lg:block">
-        <ScheduleSidebar />
-      </div>
+      {/* Schedule sidebar — desktop (toggle) */}
+      {desktopSidebarOpen && (
+        <div className="hidden lg:block">
+          <ScheduleSidebar />
+        </div>
+      )}
 
       {/* Import modal */}
       {showImport && (
