@@ -1152,7 +1152,21 @@ async def _execute_schedule_tool(
         return f"错误: 未知工具 {tc.name}"
 
 
+# Only genuinely destructive / bulk-overwrite actions warrant an explicit
+# confirm round-trip. Everyday creates and updates are reversible and the agent
+# already states what it's doing in natural language — gating those behind a
+# second "确认吗?" made the assistant feel broken (user describes tasks → agent
+# offers → user says "对的" → agent STILL asks to confirm). Those just run now.
+_NEEDS_CONFIRMATION = {
+    "delete_reminder",
+    "delete_calendar_event",
+    "import_timetable",     # wipes + replaces the whole timetable
+}
+
+
 def _require_confirmation(tool_name: str, user_message: str, arguments: dict) -> str | None:
+    if tool_name not in _NEEDS_CONFIRMATION:
+        return None
     if is_confirmation_text(user_message):
         return None
     # No JSON dump — agent should summarise in natural language
@@ -1163,9 +1177,22 @@ def _require_confirmation(tool_name: str, user_message: str, arguments: dict) ->
 
 
 def is_confirmation_text(user_message: str) -> bool:
-    confirmed_words = ("确认", "确定", "可以执行", "执行吧", "就这样", "yes", "confirm", "ok")
-    lowered = user_message.lower()
-    return any(word in lowered for word in confirmed_words)
+    lowered = (user_message or "").strip().lower()
+    if not lowered:
+        return False
+    # Strong confirmation phrases — match anywhere in the message.
+    strong = ("确认", "确定", "可以执行", "执行吧", "就这样", "没问题", "confirm")
+    if any(w in lowered for w in strong):
+        return True
+    # Short affirmatives — only count when the message is essentially just that
+    # word, so "你好" / "对了，删掉全部" don't accidentally read as a yes.
+    compact = lowered.rstrip("。.!！～~、, ")
+    short = {
+        "对", "对的", "对啊", "好", "好的", "好啊", "是", "是的", "可以",
+        "行", "行的", "嗯", "嗯嗯", "ok", "okay", "yes", "yep", "sure",
+        "创建吧", "加吧", "就这样吧", "确认执行",
+    }
+    return compact in short
 
 
 async def _store_pending_mutation(db_path: str, tool_name: str, arguments: dict) -> None:
