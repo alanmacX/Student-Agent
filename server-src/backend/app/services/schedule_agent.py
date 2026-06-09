@@ -96,15 +96,21 @@ async def run_schedule_agent(
             except (json.JSONDecodeError, TypeError):
                 pass
         elif tc.name in _ACTION_TOOLS:
-            try:
-                parsed = json.loads(result)
-            except (json.JSONDecodeError, TypeError):
-                parsed = {"result": result}
-            payload_collector["actions"].append({
-                "tool": tc.name,
-                "arguments": tc.arguments,
-                "result": parsed,
-            })
+            # A mutation that's only QUEUED for confirmation hasn't happened yet —
+            # it surfaces as the confirm button, so don't also dump its raw JSON
+            # into the "操作" payload view.
+            if isinstance(result, str) and "已加入待确认队列" in result:
+                pass
+            else:
+                try:
+                    parsed = json.loads(result)
+                except (json.JSONDecodeError, TypeError):
+                    parsed = {"result": result}
+                payload_collector["actions"].append({
+                    "tool": tc.name,
+                    "arguments": tc.arguments,
+                    "result": parsed,
+                })
         return result
 
     async for event in run_agentic_loop(
@@ -113,14 +119,18 @@ async def run_schedule_agent(
     ):
         yield event
 
-    # If a pending mutation was stored this turn, tell the frontend to show buttons
-    pending_raw = await _get_setting(db_path, "schedule_pending_mutation")
-    if pending_raw and not is_confirmation_text(user_message):
-        try:
-            pending_data = json.loads(pending_raw)
-            yield {"type": "pending_confirmation", "tool": pending_data.get("tool", "")}
-        except Exception:
-            pass
+    # If pending mutations were queued this turn, tell the frontend to show the
+    # confirm button. (Pending is now a LIST; the old code called .get() on it
+    # and threw, silently swallowing the event — which is why no button showed.)
+    pending_items = await get_pending_mutations(db_path)
+    if pending_items and not is_confirmation_text(user_message):
+        tools = [it.get("tool", "") for it in pending_items if isinstance(it, dict)]
+        yield {
+            "type": "pending_confirmation",
+            "tool": tools[0] if tools else "",
+            "tools": tools,
+            "count": len(pending_items),
+        }
 
     # Yield collected payload if any data was gathered
     has_data = any(len(v) > 0 for v in payload_collector.values())
