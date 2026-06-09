@@ -146,53 +146,71 @@ function App() {
     window.history.replaceState(null, "", `#${nextTab}`);
   }, []);
 
+  const TABS = [
+    { id: "overview",      label: "总览", icon: Calendar },
+    { id: "agent",         label: "Agent", icon: MessageSquare },
+    { id: "hub",           label: "Hub",  icon: Lightbulb },
+    { id: "notifications", label: "通知", icon: Bell },
+    { id: "settings",      label: "设置", icon: Settings },
+  ];
+
   return (
     <div className="app-shell flex h-[100dvh] flex-col overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]">
-      <div className="pointer-events-none fixed inset-x-0 top-0 h-px bg-white/15" />
 
-      <div className="flex min-h-0 flex-1 overflow-hidden md:p-3 md:pb-3">
-        {/* Main content */}
-        <main className="min-w-0 flex-1 overflow-hidden md:rounded-[18px] md:border md:border-white/10 md:bg-[var(--panel-bg)] md:shadow-2xl md:shadow-black/30">
+      {/* ── Desktop: outer shell with padding ─────────────────────────── */}
+      <div className="hidden md:flex min-h-0 flex-1 overflow-hidden p-3">
+        {/* Rounded card that contains BOTH the header and the content */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-[18px] border border-white/10 bg-[var(--panel-bg)] shadow-2xl shadow-black/30">
+
+          {/* Tab bar — lives inside the card, normal flow, never overlaps */}
+          <header className="flex h-11 shrink-0 items-center border-b border-[var(--border)] px-3">
+            {/* Segmented-control tray */}
+            <nav className="flex items-center gap-0.5 rounded-[10px] bg-[var(--surface)] p-[3px] border border-[var(--border)]">
+              {TABS.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => handleTabChange(id)}
+                  className={`flex h-[26px] items-center gap-1.5 rounded-[7px] px-2.5 text-[12px] font-medium transition-all duration-200 ${
+                    tab === id
+                      ? "bg-[var(--panel-bg)] text-white shadow-sm shadow-black/20 border border-white/8"
+                      : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                  }`}
+                >
+                  <Icon size={12} strokeWidth={tab === id ? 2.2 : 1.8} />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </nav>
+          </header>
+
+          {/* Tab content */}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <ErrorBoundary>
+              <div className={tab !== "overview"      ? "hidden" : "h-full"}><ScheduleOverview /></div>
+              <div className={tab !== "agent"         ? "hidden" : "h-full"}><ScheduleView /></div>
+              <div className={tab !== "hub"           ? "hidden" : "h-full"}><HubView /></div>
+              <div className={tab !== "notifications" ? "hidden" : "h-full"}><NotificationCenter /></div>
+              <div className={tab !== "settings"      ? "hidden" : "h-full"}><SettingsView /></div>
+            </ErrorBoundary>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Mobile: full-screen, no padding ───────────────────────────── */}
+      <div className="flex min-h-0 flex-1 overflow-hidden md:hidden">
+        <main className="min-w-0 flex-1 overflow-hidden">
           <ErrorBoundary>
-            <div className={tab !== "overview" ? "hidden" : "h-full"}><ScheduleOverview /></div>
-            <div className={tab !== "agent" ? "hidden" : "h-full"}><ScheduleView /></div>
-            <div className={tab !== "hub" ? "hidden" : "h-full"}><HubView /></div>
+            <div className={tab !== "overview"      ? "hidden" : "h-full"}><ScheduleOverview /></div>
+            <div className={tab !== "agent"         ? "hidden" : "h-full"}><ScheduleView /></div>
+            <div className={tab !== "hub"           ? "hidden" : "h-full"}><HubView /></div>
             <div className={tab !== "notifications" ? "hidden" : "h-full"}><NotificationCenter /></div>
-            <div className={tab !== "settings" ? "hidden" : "h-full"}><SettingsView /></div>
+            <div className={tab !== "settings"      ? "hidden" : "h-full"}><SettingsView /></div>
           </ErrorBoundary>
         </main>
       </div>
 
-      {/* Daily briefing popup on PWA open */}
       <DailyPopup />
-
-      {/* Mobile tab bar */}
       <TabBar active={tab} onChange={handleTabChange} onRefresh={handleRefresh} />
-
-      {/* Desktop tab strip - top right */}
-      <div className="absolute right-5 top-5 z-10 hidden overflow-hidden rounded-full border border-white/10 bg-black/20 p-1 shadow-lg shadow-black/20 backdrop-blur-xl md:flex">
-        {[
-          { id: "overview", label: "总览", icon: Calendar },
-          { id: "agent", label: "Agent", icon: MessageSquare },
-          { id: "hub", label: "Hub", icon: Lightbulb },
-          { id: "notifications", label: "通知", icon: Bell },
-          { id: "settings", label: "设置", icon: Settings },
-        ].map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => handleTabChange(id)}
-            className={`flex h-9 items-center gap-1.5 rounded-full px-3 font-medium transition-all duration-200 ${
-              tab === id
-                ? "bg-white/14 text-white shadow-sm text-xs"
-                : "text-[var(--text-tertiary)] hover:bg-white/8 hover:text-white text-[11px]"
-            }`}
-            title={label}
-          >
-            <Icon size={tab === id ? 15 : 14} />
-            <span>{label}</span>
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

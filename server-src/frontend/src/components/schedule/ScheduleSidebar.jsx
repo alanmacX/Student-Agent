@@ -235,7 +235,7 @@ function StatusRow({ icon, label, value, color }) {
 function Section({ sectionKey, icon: Icon, title, count, collapsed, onToggle, action, children }) {
   const isCollapsed = collapsed[sectionKey];
   return (
-    <section className="overflow-hidden rounded-[20px] border border-[var(--border)] bg-[var(--surface)]">
+    <section className="overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface-2)]">
       <button
         onClick={() => onToggle(sectionKey)}
         className="flex w-full items-center justify-between rounded-t-[20px] px-3.5 py-3 transition-colors hover:bg-[var(--hover-bg)]"

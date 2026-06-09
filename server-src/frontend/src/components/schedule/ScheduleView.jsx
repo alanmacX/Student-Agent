@@ -68,8 +68,8 @@ function SessionItem({ session, active, onSelect, onDelete }) {
       title={session.title}
       className={`group relative flex w-full items-center gap-2.5 rounded-[14px] px-3 py-[9px] text-left transition-all duration-200 ease-[var(--ease-smooth)] ${
         active
-          ? "bg-[var(--accent)]/15 text-white ring-1 ring-[var(--accent)]/20"
-          : "text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] hover:text-white"
+          ? "bg-[var(--hover-bg)] text-white"
+          : "text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-white"
       }`}
     >
       {/* Active indicator */}
