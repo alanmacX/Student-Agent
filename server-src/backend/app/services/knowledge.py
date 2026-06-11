@@ -292,7 +292,11 @@ async def migrate_legacy_knowledge(db: aiosqlite.Connection) -> dict[str, int]:
     except Exception:
         pass
 
-    # Legacy memory often kept the course name only in conversation metadata.
+    # Load memory rows for status/raw_ref backfill and entity linking below.
+    # NOTE: we deliberately do NOT seed course entities from memory candidate
+    # names — that injected junk like '2024级' or '数据库原理及应用期末考试'
+    # (an exam, not a course) and resurrected stale courses on every startup.
+    # Course entities come only from the authoritative course tables above.
     memory_rows = await (await db.execute(
         """SELECT id, title, kind, category, conversation_name,
                   conversation_names_json, entity_id, source_message_id,
@@ -300,10 +304,6 @@ async def migrate_legacy_knowledge(db: aiosqlite.Connection) -> dict[str, int]:
            FROM chaoxing_memory_entries
            LIMIT 1500"""
     )).fetchall()
-    for row in memory_rows:
-        if row["kind"] in {"assignment", "course", "exam"}:
-            for name in _candidate_course_names(row):
-                course_sources.setdefault(name, {})
 
     course_name_to_id: dict[str, str] = {}
     for name, attrs in course_sources.items():

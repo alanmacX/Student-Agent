@@ -812,6 +812,43 @@ class ChaoxingService:
     # Courses  (correct API: backclazzdata with mobile UA)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _current_semester_cutoff(now: datetime) -> datetime:
+        """Start date of the current academic semester.
+        Spring ≈ Feb–Jul (cutoff Feb 1), Fall ≈ Aug–Jan (cutoff Aug 1).
+        Courses whose term started before this are previous semesters."""
+        y, m = now.year, now.month
+        if 2 <= m <= 7:
+            return datetime(y, 2, 1, tzinfo=now.tzinfo)
+        if m >= 8:
+            return datetime(y, 8, 1, tzinfo=now.tzinfo)
+        return datetime(y - 1, 8, 1, tzinfo=now.tzinfo)  # January → previous fall
+
+    @staticmethod
+    def _course_is_current(content: dict, c0: dict, cutoff: datetime) -> bool:
+        """A course belongs to the current semester if its effective start
+        (beginDate string, else createtime ms) is on/after the cutoff.
+        Missing both → keep (don't risk dropping a real current course)."""
+        eff: datetime | None = None
+        bd = content.get("beginDate")
+        if isinstance(bd, str) and bd.strip():
+            for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    eff = datetime.strptime(bd.strip(), fmt).replace(tzinfo=cutoff.tzinfo)
+                    break
+                except ValueError:
+                    continue
+        if eff is None:
+            ct = c0.get("createtime")
+            try:
+                if ct:
+                    eff = datetime.fromtimestamp(int(ct) / 1000, tz=cutoff.tzinfo)
+            except (ValueError, TypeError, OSError):
+                eff = None
+        if eff is None:
+            return True
+        return eff >= cutoff
+
     async def fetch_courses(self) -> list[dict]:
         if not self.is_logged_in or not self._client:
             return []
@@ -826,7 +863,10 @@ class ChaoxingService:
                 },
             )
             data = resp.json()
+            now = datetime.now(timezone.utc)
+            cutoff = self._current_semester_cutoff(now)
             courses = []
+            skipped_old = 0
             for ch in data.get("channelList", []):
                 if ch.get("cataid") != "100000002":
                     continue
@@ -838,6 +878,10 @@ class ChaoxingService:
                 if not course_data:
                     continue
                 c0 = course_data[0]
+                # Keep only the current semester; drop previous semesters' courses.
+                if not self._course_is_current(content, c0, cutoff):
+                    skipped_old += 1
+                    continue
                 course_id = str(c0.get("id", ""))
                 class_id = str(ch.get("key", ""))
                 cpi = str(ch.get("cpi", ""))
@@ -851,7 +895,8 @@ class ChaoxingService:
                     "teacher": c0.get("teacherfactor", ""),
                     "image": c0.get("courseImg", ""),
                 })
-            log.info(f"Fetched {len(courses)} active courses (isFiled filtered)")
+            log.info(f"Fetched {len(courses)} current-semester courses "
+                     f"(isFiled + {skipped_old} pre-{cutoff.date()} filtered)")
             return courses
         except Exception as e:
             log.warning(f"fetch_courses error: {e}")
