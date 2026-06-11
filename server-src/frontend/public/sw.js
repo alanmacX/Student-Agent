@@ -1,4 +1,4 @@
-const CACHE_NAME = "chatbot-shell-v4";
+const CACHE_NAME = "chatbot-shell-v5";
 const API_CACHE = "chatbot-api-v1";
 
 self.addEventListener("install", (e) => {
@@ -81,9 +81,18 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(networkFirst(req, API_CACHE));
     return;
   }
-  if (!url.pathname.startsWith("/api/")) {
-    event.respondWith(cacheFirst(req, CACHE_NAME));
+  if (url.pathname.startsWith("/api/")) return;
+
+  // HTML navigations and the entry document must be network-first: serving a
+  // cached index.html cache-first replayed a stale build that referenced a
+  // deleted bundle hash -> blank page. Fall back to cache only when offline.
+  if (req.mode === "navigate" || url.pathname === "/" || url.pathname.endsWith(".html")) {
+    event.respondWith(networkFirst(req, CACHE_NAME));
+    return;
   }
+
+  // Hashed, immutable build assets are safe to serve cache-first.
+  event.respondWith(cacheFirst(req, CACHE_NAME));
 });
 
 async function networkFirst(req, cacheName) {
