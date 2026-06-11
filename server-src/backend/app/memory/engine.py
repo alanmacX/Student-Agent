@@ -440,10 +440,15 @@ async def _execute_effects(
                 async with aiosqlite.connect(db_path) as db:
                     for mid in ids:
                         await db.execute(
-                            "UPDATE chaoxing_memory_entries SET archived_at=? WHERE id=?",
-                            (now.isoformat(), mid),
+                            "UPDATE chaoxing_memory_entries SET archived_at=?, status='superseded', updated_at=? WHERE id=?",
+                            (now.isoformat(), now.isoformat(), mid),
                         )
                     await db.commit()
+                if ids:
+                    from app.services.ladder import cancel_ladder_for_item
+
+                    for mid in ids:
+                        await cancel_ladder_for_item(db_path, mid)
                 result.memory_archived.extend(ids)
 
             elif ef.type == EffectType.PUSH_NOW:

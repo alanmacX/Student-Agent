@@ -94,16 +94,6 @@ async def run_chaoxing_probe_adaptive(app_state, scheduler):
                     f"{result.get('processed_count', 0)} processed"
                 )
                 new_entry_ids = result.get("new_entry_ids") or []
-                if new_entry_ids:
-                    from app.services.notification_scheduler import (
-                        auto_schedule_from_memory, fetch_memory_entries_by_ids,
-                    )
-                    entries = await fetch_memory_entries_by_ids(db_path, new_entry_ids)
-                    scheduled_count = await auto_schedule_from_memory(
-                        entries, db_path, provider, model, api_key, now,
-                    )
-                    if scheduled_count:
-                        logger.debug(f"Scheduled {scheduled_count} notifications from memory")
             except Exception as e:
                 logger.error(f"Memory agent (LLM) failed in probe: {e}")
         elif not messages_changed:

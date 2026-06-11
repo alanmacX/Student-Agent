@@ -20,12 +20,6 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
-from app.services.push_service import (
-    send_push_to_all_subscribers,
-    has_notified,
-    log_notification_sent,
-)
-
 logger = logging.getLogger("memory.dispatch")
 
 
@@ -48,6 +42,12 @@ async def notify_now(
     it is derived from the content so identical pushes collapse. Returns a dict
     describing what happened (``skipped`` when deduped).
     """
+    from app.services.push_service import (
+        send_push_to_all_subscribers,
+        has_notified,
+        log_notification_sent,
+    )
+
     item_id = item_id or "auto-" + _stable_id(notif_type, title, body)[:16]
 
     if await has_notified(db_path, item_id, notif_type):
@@ -79,17 +79,18 @@ async def schedule_push(
 ) -> dict:
     """Insert a time-deferred push with a deterministic id (idempotent).
 
-    Dedup basis: an explicit ``source_id`` if given, else (title, trigger_iso).
-    Re-scheduling the same reminder is a no-op; re-scheduling at a *different*
-    time creates a new row (the time changed → it's a different intent).
+    Dedup basis: an explicit ``source_id`` if given, plus ``trigger_iso``.
+    Re-scheduling the same reminder for the same time is a no-op;
+    re-scheduling at a different time creates a new row after callers remove
+    stale unsent rows.
     """
     if not trigger_iso:
         return {"skipped": True, "reason": "no_trigger"}
     if now is None:
         now = datetime.now(timezone.utc)
 
-    dedupe_basis = source_id or f"{title}|{trigger_iso}"
-    sid = _stable_id("sched", dedupe_basis)[:32]
+    dedupe_basis = source_id or title
+    sid = _stable_id("sched", dedupe_basis, trigger_iso)[:32]
 
     async with aiosqlite.connect(db_path) as db:
         cur = await db.execute(

@@ -21,8 +21,8 @@ def init_scheduler(app_state):
         send_daily_begin,
         send_daily_summary_evening,
     )
-    from app.tasks.standby_agent import run_standby_agent
     from app.tasks.memory_sweep import run_memory_sweep
+    from app.tasks.ladder_audit import run_ladder_audit
     from app.dingtalk.task import run_dingtalk_sync
     from app.dingtalk.task import run_dingtalk_memory_task
     from app.tasks.health_monitor import run_health_check
@@ -60,18 +60,18 @@ def init_scheduler(app_state):
         replace_existing=True,
     )
     scheduler.add_job(
-        run_standby_agent,
-        IntervalTrigger(minutes=app_state.settings.standby_interval_minutes),
-        args=[app_state],
-        id="standby_agent",
-        misfire_grace_time=120,
-        replace_existing=True,
-    )
-    scheduler.add_job(
         run_memory_sweep,
         IntervalTrigger(hours=1),
         args=[app_state],
         id="memory_sweep",
+        misfire_grace_time=300,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_ladder_audit,
+        IntervalTrigger(hours=1),
+        args=[app_state],
+        id="ladder_audit",
         misfire_grace_time=300,
         replace_existing=True,
     )

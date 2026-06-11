@@ -134,11 +134,16 @@ async def sync_to_memory(
             if to_archive:
                 ni = now.isoformat()
                 await db.executemany(
-                    "UPDATE chaoxing_memory_entries SET archived_at=? WHERE id=?",
-                    [(ni, mid) for mid in to_archive],
+                    "UPDATE chaoxing_memory_entries SET archived_at=?, status='expired', updated_at=? WHERE id=?",
+                    [(ni, ni, mid) for mid in to_archive],
                 )
                 archived += len(to_archive)
             await db.commit()
+        if to_archive:
+            from app.services.ladder import cancel_ladder_for_item
+
+            for mid in to_archive:
+                await cancel_ladder_for_item(db_path, mid)
 
     # ── 2. Local course schedule (server_courses) ─────────────────────────────
     horizon = (now + timedelta(days=14)).isoformat()

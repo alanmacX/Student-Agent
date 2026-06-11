@@ -319,6 +319,12 @@ _COLUMN_MIGRATIONS: list[str] = [
     # Unified memory: kind + cross-references
     "ALTER TABLE chaoxing_memory_entries ADD COLUMN kind TEXT NOT NULL DEFAULT 'message'",
     "ALTER TABLE chaoxing_memory_entries ADD COLUMN related_ids_json TEXT NOT NULL DEFAULT '[]'",
+    # Redesign phase 1: archive instead of deleting, and keep provenance hooks
+    # for the reconciler that replaces the legacy engine in later phases.
+    "ALTER TABLE chaoxing_memory_entries ADD COLUMN entity_id TEXT",
+    "ALTER TABLE chaoxing_memory_entries ADD COLUMN raw_ref TEXT",
+    "ALTER TABLE chaoxing_memory_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+    "UPDATE chaoxing_memory_entries SET status='expired' WHERE archived_at IS NOT NULL AND status='active'",
 
     # ── Modular memory: multi-source + hierarchy ──────────────────────────
     # source_type: which provider wrote this entry
@@ -340,6 +346,8 @@ _COLUMN_MIGRATIONS: list[str] = [
     # index for tier-based retrieval
     "CREATE INDEX IF NOT EXISTS idx_memory_tier "
     "ON chaoxing_memory_entries(hierarchy_tier, archived_at, expires_at)",
+    "CREATE INDEX IF NOT EXISTS idx_memory_status "
+    "ON chaoxing_memory_entries(status, archived_at, expires_at)",
     # index for source-type retrieval
     "CREATE INDEX IF NOT EXISTS idx_memory_source "
     "ON chaoxing_memory_entries(source_type, archived_at)",
@@ -360,6 +368,8 @@ _COLUMN_MIGRATIONS: list[str] = [
 
     # ── scheduled_notifications: rule explanation ─────────────────────────
     "ALTER TABLE scheduled_notifications ADD COLUMN reason TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_sched_notif_source "
+    "ON scheduled_notifications(source_id, sent_at, cancelled_at)",
 
     # ── notification delivery state ───────────────────────────────────────
     "ALTER TABLE notification_log ADD COLUMN device_received_at TEXT",

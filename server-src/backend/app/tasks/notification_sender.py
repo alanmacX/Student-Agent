@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from app.services.push_service import send_push_to_all_subscribers, has_notified, log_notification_sent
 import aiosqlite
 
@@ -52,27 +52,6 @@ async def check_and_send_deadline_notifications(app_state):
                 await log_notification_sent(db_path, assignment["id"], notif_type,
                                              title=f"📋 {assignment['title']}",
                                              body=f"还剩 {remaining}。{assignment.get('courseName', '')}")
-
-    # Check high-importance memory entries
-    async with aiosqlite.connect(db_path) as db:
-        rows = await (await db.execute("""
-            SELECT id, title, action_hint FROM chaoxing_memory_entries
-            WHERE importance='high' AND archived_at IS NULL
-            AND datetime(extracted_at) > datetime('now', '-10 minutes')
-        """)).fetchall()
-
-    for row in rows:
-        entry_id, title, action_hint = row
-        notif_type = "memory_high"
-        if not await has_notified(db_path, entry_id, notif_type):
-            await send_push_to_all_subscribers(
-                db_path,
-                title=f"🔔 重要消息：{title}",
-                body=action_hint or title,
-                tag=f"memory-{entry_id}",
-            )
-            await log_notification_sent(db_path, entry_id, notif_type,
-                                         title=f"🔔 重要消息：{title}", body=action_hint or title)
 
 
 async def send_daily_begin(app_state):
@@ -138,13 +117,12 @@ async def check_scheduled_notifications(app_state):
             LIMIT 20
         """, (now.isoformat(),))).fetchall()
 
+    quiet_start, quiet_end = await _load_quiet_hours(db_path)
     for row in rows:
-        scheduled_at = _parse_dt(row["scheduled_at"]) or now
         local_now = now.astimezone(timezone(timedelta(hours=8)))
-        local_hour = local_now.hour
-        if 23 <= local_hour or local_hour < 7:
+        if _in_quiet_hours(local_now, quiet_start, quiet_end):
             delayed = local_now.replace(
-                hour=7, minute=30, second=0, microsecond=0
+                hour=quiet_end.hour, minute=quiet_end.minute, second=0, microsecond=0
             )
             if delayed <= local_now:
                 delayed += timedelta(days=1)
@@ -172,6 +150,32 @@ async def check_scheduled_notifications(app_state):
         if result.get("attempted", 0) > 0:
             await log_notification_sent(db_path, row["id"], "scheduled_notification",
                                          title=row["title"], body=row["body"])
+
+
+async def _load_quiet_hours(db_path: str) -> tuple[time, time]:
+    async with aiosqlite.connect(db_path) as db:
+        row = await (await db.execute(
+            "SELECT value FROM settings WHERE key='quiet_hours'"
+        )).fetchone()
+    return _parse_quiet_hours(row[0] if row else None)
+
+
+def _parse_quiet_hours(value: str | None) -> tuple[time, time]:
+    raw = (value or "23:30-07:00").strip()
+    try:
+        start_raw, end_raw = raw.split("-", 1)
+        start_h, start_m = [int(part) for part in start_raw.split(":", 1)]
+        end_h, end_m = [int(part) for part in end_raw.split(":", 1)]
+        return time(start_h, start_m), time(end_h, end_m)
+    except Exception:
+        return time(23, 30), time(7, 0)
+
+
+def _in_quiet_hours(local_dt: datetime, start: time, end: time) -> bool:
+    current = local_dt.time()
+    if start <= end:
+        return start <= current < end
+    return current >= start or current < end
 
 
 def _format_remaining(delta: timedelta) -> str:

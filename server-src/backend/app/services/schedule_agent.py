@@ -809,10 +809,22 @@ async def _execute_schedule_tool(
         memory_id = tc.arguments.get("id", "")
         if not memory_id:
             return "错误: 缺少 memory id。"
+        import datetime as _dt
+        now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
         async with aiosqlite.connect(db_path) as db:
-            await db.execute("DELETE FROM memory_topic_index WHERE memory_id=?", (memory_id,))
-            cur = await db.execute("DELETE FROM chaoxing_memory_entries WHERE id=?", (memory_id,))
+            cur = await db.execute(
+                """UPDATE chaoxing_memory_entries
+                   SET archived_at=COALESCE(archived_at, ?),
+                       status='superseded',
+                       updated_at=?
+                   WHERE id=?""",
+                (now_iso, now_iso, memory_id),
+            )
             await db.commit()
+        if cur.rowcount > 0:
+            from app.services.ladder import cancel_ladder_for_item
+
+            await cancel_ladder_for_item(db_path, memory_id)
         return json.dumps({"ok": cur.rowcount > 0}, ensure_ascii=False)
     elif tc.name == "list_reminders":
         from .schedule_store import list_reminders

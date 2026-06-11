@@ -7,8 +7,8 @@ Runs every 10 minutes via APScheduler. Checks:
   2. Chaoxing login status
   3. API provider consecutive failures (called externally from classifier)
 
-Alerts re-fire on a fixed cooldown (default 6h) for as long as the problem
-persists — they are NOT one-shot. (The previous version relied on
+Alerts re-fire on a fixed cooldown for as long as the problem persists — they
+are NOT one-shot. (The previous version relied on
 ``has_notified``, which permanently de-duplicates once a push is device-acked,
 so a single early alert silenced DingTalk-down forever — which is exactly why an
 8-day outage went unreported.)
@@ -35,9 +35,11 @@ logger = logging.getLogger("health_monitor")
 DINGTALK_STALE_SECONDS = int(os.getenv("DINGTALK_STALE_SECONDS", str(6 * 3600)))
 # How often a still-unresolved alert is allowed to re-fire.
 HEALTH_COOLDOWN_SECONDS = int(os.getenv("HEALTH_COOLDOWN_SECONDS", str(6 * 3600)))
+CHAOXING_COOLDOWN_SECONDS = int(os.getenv("CHAOXING_COOLDOWN_SECONDS", str(12 * 3600)))
 
 # Track consecutive API failures per provider (in-memory, resets on restart)
 _api_fail_count: dict[str, int] = {}
+_chaoxing_last_logged_in: bool | None = None
 
 
 def _dingtalk_db_age() -> float | None:
@@ -65,14 +67,15 @@ def _dingtalk_db_age() -> float | None:
     return time.time() - newest
 
 
-def _check_dingtalk() -> List[Tuple[str, str, str]]:
-    """Return list of (tag, title, body) alerts for DingTalk issues."""
+def _check_dingtalk() -> List[Tuple[str, str, str, int]]:
+    """Return list of (tag, title, body, cooldown_seconds) alerts."""
     age = _dingtalk_db_age()
     if age is None:
         return [(
             "dingtalk_missing",
             "钉钉未登录",
             "未找到钉钉账号数据，客户端可能未运行或从未登录，请在设置中扫码登录。",
+            HEALTH_COOLDOWN_SECONDS,
         )]
     if age > DINGTALK_STALE_SECONDS:
         hours = int(age // 3600)
@@ -81,16 +84,29 @@ def _check_dingtalk() -> List[Tuple[str, str, str]]:
             "dingtalk_stale",
             "钉钉可能已掉线",
             f"消息库已 {span} 无更新，登录态可能已失效，请到「设置 → 钉钉」重新扫码登录。",
+            HEALTH_COOLDOWN_SECONDS,
         )]
     return []
 
 
-def _check_chaoxing(app_state) -> List[Tuple[str, str, str]]:
+def _check_chaoxing(app_state) -> List[Tuple[str, str, str, int]]:
     """Return alert if Chaoxing session is logged out."""
+    global _chaoxing_last_logged_in
     svc = getattr(app_state, "chaoxing_svc", None)
-    if svc and not svc.is_logged_in:
-        return [("chaoxing_logout", "学习通登录已失效", "请重新登录超星学习通")]
-    return []
+    if not svc:
+        return []
+    logged_in = bool(svc.is_logged_in)
+    was_logged_in = _chaoxing_last_logged_in
+    _chaoxing_last_logged_in = logged_in
+    if logged_in:
+        return []
+    cooldown = 0 if was_logged_in is True else CHAOXING_COOLDOWN_SECONDS
+    return [(
+        "chaoxing_logout",
+        "⚠️ 学习通已掉线，点开重新扫码",
+        "点开应用到「设置 → 学习通」重新扫码；恢复前我会每 12 小时提醒一次。",
+        cooldown,
+    )]
 
 
 def _seconds_since_last_alert(db_path: str, tag: str) -> float | None:
@@ -120,13 +136,13 @@ async def run_health_check(app_state) -> None:
         getattr(app_state, "settings", None), "database_path", "/data/chatbot.db"
     )
 
-    alerts: List[Tuple[str, str, str]] = []
+    alerts: List[Tuple[str, str, str, int]] = []
     alerts.extend(_check_dingtalk())
     alerts.extend(_check_chaoxing(app_state))
 
-    for tag, title, body in alerts:
+    for tag, title, body, cooldown in alerts:
         since = _seconds_since_last_alert(db_path, tag)
-        if since is not None and since < HEALTH_COOLDOWN_SECONDS:
+        if since is not None and since < cooldown:
             logger.debug("Health alert on cooldown (%.0fs ago): %s", since, tag)
             continue
         await send_push_to_all_subscribers(db_path, title, body, tag=tag)
@@ -135,7 +151,7 @@ async def run_health_check(app_state) -> None:
 
 
 async def alert_api_failure(app_state, provider_id: str) -> None:
-    """Called from classifier/standby_agent on LLM call failure.
+    """Called from classifier or other LLM call sites on LLM call failure.
 
     Only fires after 3 consecutive failures for the same provider.
     """

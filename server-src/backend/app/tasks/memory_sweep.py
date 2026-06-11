@@ -1,6 +1,6 @@
 """
 Memory sweep task — runs hourly via APScheduler.
-Uses MemoryRepository.sweep() to delete expired entries and cap active count.
+Uses MemoryRepository.sweep() to archive expired entries and cap active count.
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ async def run_memory_sweep(app_state):
         repo = MemoryRepository(db_path)
         result = await repo.sweep(datetime.now(timezone.utc))
         logger.debug(
-            "Memory sweep: deleted_expired=%d trimmed=%d",
-            result["deleted_expired"], result["trimmed"],
+            "Memory sweep: archived_expired=%d trimmed=%d",
+            result["archived_expired"], result["trimmed"],
         )
     except Exception as e:
         logger.error(f"Memory sweep failed: {e}")

@@ -1,11 +1,14 @@
 from __future__ import annotations
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
 from .memory_models import display_text, key_text, normalize_importance, parse_iso, sha256_hex
+
+logger = logging.getLogger("memory_reducer")
 
 
 def canonical_dedupe_key(item: dict, title: str, summary: str, messages: list[dict]) -> str:
@@ -107,8 +110,20 @@ async def reduce_memory(
             if linked_assignment_key and importance == "high":
                 await _annotate_assignment_entry(db, entry_id, linked_assignment_key, action_hint, now)
 
-        await _sweep_memory_conn(db, now)
+        archived_by_sweep = await _sweep_memory_conn(db, now)
         await db.commit()
+    if archived_by_sweep:
+        from app.services.ladder import cancel_ladder_for_item
+
+        for mid in archived_by_sweep:
+            await cancel_ladder_for_item(db_path, mid)
+    if changed_ids:
+        from app.services.ladder import schedule_ladder_for_items
+
+        try:
+            await schedule_ladder_for_items(db_path, changed_ids, now, replace=True)
+        except Exception as e:
+            logger.warning("Failed to schedule memory ladder: %s", e)
     return changed_ids
 
 
@@ -238,8 +253,8 @@ async def _insert_memory_entry(db, entry_id, dedupe_key, item, messages, now, ex
          title, summary, reason, action_hint, importance, sent_at, extracted_at, expires_at,
          source_text_preview, dedupe_key, category, confidence, content_time, created_at, updated_at,
          source_ids_json, source_fingerprints_json, conversation_ids_json, conversation_names_json,
-         sender_names_json, linked_assignment_key, linked_course_key)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         sender_names_json, linked_assignment_key, linked_course_key, raw_ref, status)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         entry_id, first.get("source_id"), first.get("conversation_id"), first.get("conversation_name"),
         first.get("sender_id"), first.get("sender_name"), title, summary, item.get("reason") or "",
@@ -249,6 +264,7 @@ async def _insert_memory_entry(db, entry_id, dedupe_key, item, messages, now, ex
         json.dumps(source_ids, ensure_ascii=False), json.dumps(fingerprints, ensure_ascii=False),
         json.dumps(conversation_ids, ensure_ascii=False), json.dumps(conversation_names, ensure_ascii=False),
         json.dumps(sender_names, ensure_ascii=False), item.get("linked_assignment_key"), item.get("linked_course_key"),
+        first.get("source_id"), "active",
     ))
 
 
@@ -267,7 +283,8 @@ async def _update_memory_entry(db, existing, item, messages, now, expires_at, co
             category=?, confidence=?, content_time=COALESCE(?, content_time),
             source_ids_json=?, source_fingerprints_json=?, conversation_ids_json=?,
             conversation_names_json=?, sender_names_json=?, linked_assignment_key=COALESCE(?, linked_assignment_key),
-            linked_course_key=COALESCE(?, linked_course_key), updated_at=?
+            linked_course_key=COALESCE(?, linked_course_key), updated_at=?,
+            archived_at=NULL, status='active', raw_ref=COALESCE(?, raw_ref)
         WHERE id=?
     """, (
         title, summary, item.get("reason") or "", item.get("action_hint"), importance,
@@ -276,31 +293,66 @@ async def _update_memory_entry(db, existing, item, messages, now, expires_at, co
         json.dumps(source_ids, ensure_ascii=False), json.dumps(fingerprints, ensure_ascii=False),
         json.dumps(conversation_ids, ensure_ascii=False), json.dumps(conversation_names, ensure_ascii=False),
         json.dumps(sender_names, ensure_ascii=False), item.get("linked_assignment_key"),
-        item.get("linked_course_key"), now.isoformat(), existing["id"],
+        item.get("linked_course_key"), now.isoformat(),
+        messages[0].get("source_id") if messages else None, existing["id"],
     ))
 
 
 async def sweep_memory(db_path: str, now: datetime) -> None:
     async with aiosqlite.connect(db_path) as db:
-        await _sweep_memory_conn(db, now)
+        archived_ids = await _sweep_memory_conn(db, now)
         await db.commit()
+    if archived_ids:
+        from app.services.ladder import cancel_ladder_for_item
+
+        for mid in archived_ids:
+            await cancel_ladder_for_item(db_path, mid)
 
 
-async def _sweep_memory_conn(db, now: datetime) -> None:
-    await db.execute("DELETE FROM chaoxing_memory_entries WHERE expires_at IS NOT NULL AND expires_at <= ?", (now.isoformat(),))
-    row = await (await db.execute("SELECT COUNT(*) FROM chaoxing_memory_entries WHERE archived_at IS NULL")).fetchone()
+async def _sweep_memory_conn(db, now: datetime) -> list[str]:
+    ni = now.isoformat()
+    expired_rows = await (await db.execute(
+        """SELECT id FROM chaoxing_memory_entries
+           WHERE expires_at IS NOT NULL
+             AND expires_at <= ?
+             AND archived_at IS NULL
+             AND COALESCE(status, 'active')='active'""",
+        (ni,),
+    )).fetchall()
+    archived_ids = [row[0] for row in expired_rows]
+    if archived_ids:
+        await db.execute(
+            f"""UPDATE chaoxing_memory_entries
+               SET status='expired', archived_at=COALESCE(archived_at, ?), updated_at=?
+               WHERE id IN ({','.join('?' for _ in archived_ids)})""",
+            [ni, ni, *archived_ids],
+        )
+    row = await (await db.execute(
+        """SELECT COUNT(*) FROM chaoxing_memory_entries
+           WHERE archived_at IS NULL
+             AND COALESCE(status, 'active')='active'"""
+    )).fetchone()
     count = row[0] if row else 0
     if count > 100:
-        await db.execute("""
-            DELETE FROM chaoxing_memory_entries
-            WHERE id IN (
-                SELECT id FROM chaoxing_memory_entries
-                WHERE archived_at IS NULL
-                ORDER BY CASE importance WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END ASC,
-                         COALESCE(updated_at, extracted_at, sent_at) ASC
-                LIMIT ?
+        trim_rows = await (await db.execute(
+            """SELECT id FROM chaoxing_memory_entries
+               WHERE archived_at IS NULL
+                 AND COALESCE(status, 'active')='active'
+               ORDER BY CASE importance WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END ASC,
+                        COALESCE(updated_at, extracted_at, sent_at) ASC
+               LIMIT ?""",
+            (count - 100,),
+        )).fetchall()
+        trim_ids = [row[0] for row in trim_rows]
+        if trim_ids:
+            await db.execute(
+                f"""UPDATE chaoxing_memory_entries
+                   SET status='expired', archived_at=COALESCE(archived_at, ?), updated_at=?
+                   WHERE id IN ({','.join('?' for _ in trim_ids)})""",
+                [ni, ni, *trim_ids],
             )
-        """, (count - 100,))
+            archived_ids.extend(trim_ids)
+    return archived_ids
 
 
 async def get_insights(db_path: str, now: datetime, limit: int = 40) -> list[dict]:

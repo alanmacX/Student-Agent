@@ -143,6 +143,8 @@ class MemoryRepository:
                 existing = await self._reconcile(db, entry)
                 reconciled = existing is not None
 
+            raw_ref = entry.source_ids[0] if entry.source_ids else None
+
             if existing:
                 eid = existing["id"]
                 # On a fuzzy reconcile-merge, preserve the existing row's
@@ -156,7 +158,8 @@ class MemoryRepository:
                         title=?, summary=?, importance=?, action_hint=?,
                         expires_at=?, hierarchy_tier=?, for_automation=?,
                         source_type=?, kind=?, category=?,
-                        confidence=?, updated_at=?, archived_at=NULL
+                        confidence=?, updated_at=?, archived_at=NULL,
+                        status='active', raw_ref=COALESCE(?, raw_ref)
                         WHERE id=?""",
                     (
                         entry.title, entry.summary, entry.importance,
@@ -164,7 +167,7 @@ class MemoryRepository:
                         expires_at.isoformat(), tier,
                         1 if entry.for_automation else 0,
                         src, entry.kind, entry.category,
-                        entry.confidence, ni, eid,
+                        entry.confidence, ni, raw_ref, eid,
                     ),
                 )
             else:
@@ -179,8 +182,9 @@ class MemoryRepository:
                          source_ids_json, conversation_ids_json,
                          conversation_names_json, sender_names_json,
                          source_fingerprints_json, related_ids_json,
-                         sent_at, extracted_at, created_at, updated_at)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         sent_at, extracted_at, created_at, updated_at,
+                         raw_ref, status)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         eid,
                         entry.title, entry.summary, entry.reason,
@@ -197,12 +201,33 @@ class MemoryRepository:
                         json.dumps(entry.sender_names, ensure_ascii=False),
                         "[]", "[]",
                         ni, ni, ni, ni,
+                        raw_ref, "active",
                     ),
                 )
             # Index high-signal keys for cross-source reconciliation + the
             # engine's "related entries" context. Idempotent (PK on key+id).
             await self._index_entity(db, eid, entry, expires_at)
             await db.commit()
+        if entry.for_automation or entry.importance == "high":
+            try:
+                from app.services.ladder import schedule_ladder_for_item
+
+                body = entry.action_hint or entry.summary or entry.title
+                await schedule_ladder_for_item(
+                    self.db_path,
+                    item_id=eid,
+                    kind=entry.category or entry.kind,
+                    due=expires_at,
+                    importance=entry.importance,
+                    title=entry.title,
+                    body=body,
+                    now=now,
+                    replace=True,
+                )
+            except Exception:
+                # Queue repair is also covered by ladder_audit; never fail the
+                # underlying memory write because the scheduler path hiccuped.
+                pass
         return eid
 
     async def _reconcile(self, db, entry: MemoryEntry):
@@ -219,7 +244,8 @@ class MemoryRepository:
             return None
         rows = await (await db.execute(
             f"SELECT id, title, source_type FROM {_TABLE} "
-            f"WHERE kind=? AND archived_at IS NULL",
+            f"""WHERE kind=? AND archived_at IS NULL
+                  AND COALESCE(status, 'active')='active'""",
             (entry.kind,),
         )).fetchall()
         for r in rows:
@@ -264,44 +290,66 @@ class MemoryRepository:
         return row[0] if row else 0
 
     async def sweep(self, now: datetime, cap: int = 120) -> dict:
-        """Delete expired entries, trim active count to cap, and clean up the
-        ``memory_topic_index`` rows that those deletes orphan.
-
-        (Despite the historical name this hard-deletes rather than archiving —
-        the table is a rolling cache, not an audit log. The orphan cleanup
-        matters: ``_index_entity``/``_update_topic_index`` only ever insert, so
-        without this the index grows unbounded and pollutes context matching.)
+        """Archive expired entries, trim active count to cap, and clean up the
+        ``memory_topic_index`` rows that point at rows no longer present.
         """
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         deleted_expired = trimmed = 0
+        archived_ids: list[str] = []
         async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute(
-                f"DELETE FROM {_TABLE} WHERE expires_at IS NOT NULL AND expires_at <= ?",
-                (now.isoformat(),),
-            )
-            deleted_expired = cur.rowcount
+            db.row_factory = aiosqlite.Row
+            ni = now.isoformat()
+            expired_rows = await (await db.execute(
+                f"""SELECT id FROM {_TABLE}
+                    WHERE expires_at IS NOT NULL
+                      AND expires_at <= ?
+                      AND archived_at IS NULL
+                      AND COALESCE(status, 'active')='active'""",
+                (ni,),
+            )).fetchall()
+            expired_ids = [row["id"] for row in expired_rows]
+            if expired_ids:
+                await db.execute(
+                    f"""UPDATE {_TABLE}
+                    SET status='expired', archived_at=COALESCE(archived_at, ?),
+                        updated_at=?
+                    WHERE id IN ({','.join('?' for _ in expired_ids)})""",
+                    [ni, ni, *expired_ids],
+                )
+            deleted_expired = len(expired_ids)
+            archived_ids.extend(expired_ids)
             row = await (await db.execute(
-                f"SELECT COUNT(*) FROM {_TABLE} WHERE archived_at IS NULL"
+                f"""SELECT COUNT(*) FROM {_TABLE}
+                    WHERE archived_at IS NULL
+                      AND COALESCE(status, 'active')='active'"""
             )).fetchone()
             count = row[0] if row else 0
             if count > cap:
                 excess = count - cap
-                await db.execute(
-                    f"""DELETE FROM {_TABLE}
-                        WHERE id IN (
-                            SELECT id FROM {_TABLE}
-                            WHERE archived_at IS NULL
-                            ORDER BY hierarchy_tier DESC,
-                                     CASE importance WHEN 'high' THEN 3
-                                                     WHEN 'medium' THEN 2
-                                                     ELSE 1 END ASC,
-                                     COALESCE(updated_at, created_at) ASC
-                            LIMIT ?
-                        )""",
+                trim_rows = await (await db.execute(
+                    f"""SELECT id FROM {_TABLE}
+                        WHERE archived_at IS NULL
+                          AND COALESCE(status, 'active')='active'
+                        ORDER BY hierarchy_tier DESC,
+                                 CASE importance WHEN 'high' THEN 3
+                                                 WHEN 'medium' THEN 2
+                                                 ELSE 1 END ASC,
+                                 COALESCE(updated_at, created_at) ASC
+                        LIMIT ?""",
                     (excess,),
-                )
-                trimmed = excess
+                )).fetchall()
+                trim_ids = [row["id"] for row in trim_rows]
+                if trim_ids:
+                    await db.execute(
+                        f"""UPDATE {_TABLE}
+                            SET status='expired', archived_at=COALESCE(archived_at, ?),
+                                updated_at=?
+                            WHERE id IN ({','.join('?' for _ in trim_ids)})""",
+                        [ni, ni, *trim_ids],
+                    )
+                trimmed = len(trim_ids)
+                archived_ids.extend(trim_ids)
             # Cascade: drop topic-index rows whose memory entry no longer exists.
             idx = await db.execute(
                 f"""DELETE FROM memory_topic_index
@@ -309,7 +357,15 @@ class MemoryRepository:
             )
             orphans_cleaned = idx.rowcount
             await db.commit()
-        return {"deleted_expired": deleted_expired, "trimmed": trimmed,
+        if archived_ids:
+            try:
+                from app.services.ladder import cancel_ladder_for_item
+
+                for mid in archived_ids:
+                    await cancel_ladder_for_item(self.db_path, mid)
+            except Exception:
+                pass
+        return {"archived_expired": deleted_expired, "trimmed": trimmed,
                 "topic_index_orphans_cleaned": orphans_cleaned}
 
     # ── Read ──────────────────────────────────────────────────────────────────
@@ -339,6 +395,7 @@ class MemoryRepository:
                     FROM {_TABLE}
                     WHERE hierarchy_tier <= 1
                       AND archived_at IS NULL
+                      AND COALESCE(status, 'active')='active'
                       AND (expires_at IS NULL OR expires_at > ?)
                     ORDER BY hierarchy_tier ASC, expires_at ASC
                     LIMIT 4""",
@@ -355,6 +412,7 @@ class MemoryRepository:
                         FROM {_TABLE}
                         WHERE hierarchy_tier BETWEEN 2 AND ?
                           AND archived_at IS NULL
+                          AND COALESCE(status, 'active')='active'
                           AND (expires_at IS NULL OR expires_at > ?)
                         ORDER BY hierarchy_tier ASC, importance DESC
                         LIMIT 20""",
@@ -400,6 +458,7 @@ class MemoryRepository:
                     WHERE for_automation=1
                       AND action_hint IS NOT NULL AND action_hint != ''
                       AND archived_at IS NULL
+                      AND COALESCE(status, 'active')='active'
                       AND expires_at BETWEEN ? AND ?
                       {source_clause}
                     ORDER BY hierarchy_tier ASC, expires_at ASC
