@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, CalendarDays, CheckCircle2, Clock, Lightbulb, Plus, RefreshCw, ShieldCheck, StickyNote, Trash2 } from "lucide-react";
+import { Activity, CalendarDays, CalendarRange, CheckCircle2, Clock, Lightbulb, Plus, RefreshCw, ShieldCheck, StickyNote, Trash2 } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import RemindersPanel from "../settings/RemindersPanel";
 
@@ -89,6 +89,11 @@ export default function HubView() {
           </section>
 
           <section className="surface-card animate-rise p-4" style={{ animationDelay: "90ms" }}>
+            <SectionTitle icon={CalendarRange} label="长期" />
+            <ItemList items={dashboard?.longterm || []} empty="未来 90 天暂无较远的安排。" />
+          </section>
+
+          <section className="surface-card animate-rise p-4" style={{ animationDelay: "120ms" }}>
             <SectionTitle icon={ShieldCheck} label="最近执行" />
             <AuditList items={dashboard?.agent_audit || []} />
           </section>

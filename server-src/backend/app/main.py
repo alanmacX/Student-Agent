@@ -101,7 +101,7 @@ async def health_detail():
     return result
 
 
-from app.routers import conversations, chat, schedule, chaoxing, providers, settings as settings_router, push, reminders, data, analytics, dashboard
+from app.routers import conversations, chat, schedule, chaoxing, providers, settings as settings_router, push, reminders, data, analytics, dashboard, agent_quick
 from app.dingtalk.router import router as dingtalk_router
 
 app.include_router(conversations.router)
@@ -117,6 +117,7 @@ app.include_router(data.router)
 app.include_router(dingtalk_router)
 app.include_router(analytics.router)
 app.include_router(dashboard.router)
+app.include_router(agent_quick.router)
 
 if settings.debug:
     from app.routers.debug import router as debug_router

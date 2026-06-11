@@ -21,6 +21,7 @@ async def dashboard_today():
     today_start = datetime.combine(local_now.date(), time.min, tzinfo=LOCAL_TZ).astimezone(timezone.utc)
     tomorrow_start = today_start + timedelta(days=1)
     week_end = now + timedelta(days=7)
+    longterm_horizon = now + timedelta(days=90)
     now_iso = now.isoformat()
 
     async with db_conn() as db:
@@ -62,9 +63,10 @@ async def dashboard_today():
             SELECT id, course_name, title, due_date, status
             FROM chaoxing_assignments
             WHERE status NOT IN ('已交', '已完成')
+              AND (due_date IS NULL OR due_date <= ?)
             ORDER BY due_date IS NULL, due_date ASC
             LIMIT 30
-        """)
+        """, (week_end.isoformat(),))
         scheduled = await _fetchall(db, """
             SELECT id, title, body, scheduled_at, source_type, source_id, reason
             FROM scheduled_notifications
@@ -73,6 +75,38 @@ async def dashboard_today():
             ORDER BY scheduled_at ASC
             LIMIT 30
         """, (now_iso, week_end.isoformat()))
+        # ── Long-term: distant-dated items (8–90 days out) ──────────────────
+        far_events = await _fetchall(db, """
+            SELECT id, title, start_at, end_at, location
+            FROM server_events
+            WHERE start_at > ? AND start_at <= ?
+            ORDER BY start_at ASC
+            LIMIT 40
+        """, (week_end.isoformat(), longterm_horizon.isoformat()))
+        far_reminders = await _fetchall(db, """
+            SELECT id, title, due_at, notes, is_important
+            FROM server_reminders
+            WHERE is_completed=0 AND due_at > ? AND due_at <= ?
+            ORDER BY due_at ASC
+            LIMIT 40
+        """, (week_end.isoformat(), longterm_horizon.isoformat()))
+        far_assignments = await _fetchall(db, """
+            SELECT id, course_name, title, due_date, status
+            FROM chaoxing_assignments
+            WHERE status NOT IN ('已交', '已完成')
+              AND due_date > ? AND due_date <= ?
+            ORDER BY due_date ASC
+            LIMIT 40
+        """, (week_end.isoformat(), longterm_horizon.isoformat()))
+        far_memory = await _fetchall(db, """
+            SELECT id, title, summary, action_hint, importance, expires_at
+            FROM chaoxing_memory_entries
+            WHERE archived_at IS NULL
+              AND COALESCE(status, 'active')='active'
+              AND expires_at > ? AND expires_at <= ?
+            ORDER BY expires_at ASC
+            LIMIT 40
+        """, (week_end.isoformat(), longterm_horizon.isoformat()))
         notifications = await _fetchall(db, """
             SELECT id, item_id, notif_type, sent_at, clicked_at, dismissed_at,
                    push_title AS title, push_body AS body
@@ -105,6 +139,18 @@ async def dashboard_today():
         *[_todo("scheduled", s["id"], s["title"], s.get("scheduled_at"), "medium", s.get("body") or s.get("reason")) for s in scheduled],
     ])
 
+    # Long-term bucket, excluding anything already shown in plan/upcoming.
+    _seen_keys = {i["key"] for i in plan} | {i["key"] for i in upcoming}
+    longterm = [
+        i for i in _dedupe([
+            *[_event("event", e["id"], e["title"], e["start_at"], e["end_at"], e.get("location")) for e in far_events],
+            *[_todo("reminder", r["id"], r["title"], r.get("due_at"), "high" if r.get("is_important") else "medium", r.get("notes")) for r in far_reminders],
+            *[_todo("assignment", a["id"], f"{a.get('course_name') or '学习通'}：{a['title']}", a.get("due_date"), "medium", a.get("status")) for a in far_assignments],
+            *[_todo("memory", m["id"], m["title"], m.get("expires_at"), m.get("importance"), m.get("action_hint") or m.get("summary")) for m in far_memory],
+        ])
+        if i["key"] not in _seen_keys
+    ]
+
     used = await tokens_used_today(settings.database_path, now)
     limit = await daily_token_budget(settings.database_path)
     return {
@@ -112,6 +158,7 @@ async def dashboard_today():
         "now": local_now.isoformat(),
         "plan": sorted(plan, key=lambda x: x.get("sort_at") or "9999")[:40],
         "upcoming": sorted(upcoming, key=lambda x: x.get("sort_at") or "9999")[:40],
+        "longterm": sorted(longterm, key=lambda x: x.get("sort_at") or "9999")[:40],
         "notifications": notifications,
         "feedback": {r["action"]: r["count"] for r in feedback_rows},
         "agent_audit": audits,
