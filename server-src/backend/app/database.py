@@ -1,7 +1,6 @@
 from __future__ import annotations
 import aiosqlite
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from app.config import settings
 
 
@@ -444,65 +443,6 @@ _COLUMN_MIGRATIONS: list[str] = [
 
 
 async def _seed_knowledge_base(db: aiosqlite.Connection) -> None:
-    from app.services.knowledge import backfill_kb_fts, create_fact, upsert_entity
+    from app.services.knowledge import migrate_legacy_knowledge
 
-    now = datetime.now(timezone.utc).isoformat()
-    db.row_factory = aiosqlite.Row
-
-    courses = await (await db.execute(
-        """SELECT title, location, notes, MIN(start_at) AS first_start
-           FROM server_courses
-           WHERE title IS NOT NULL AND title != ''
-           GROUP BY title
-           LIMIT 200"""
-    )).fetchall()
-    for row in courses:
-        attrs = {}
-        if row["location"]:
-            attrs["location"] = row["location"]
-        if row["notes"]:
-            attrs["notes"] = row["notes"]
-        weekday = _weekday_from_iso(row["first_start"])
-        if weekday:
-            attrs["weekday"] = weekday
-        await upsert_entity(
-            db,
-            etype="course",
-            name=row["title"],
-            aliases=[],
-            attrs=attrs,
-            now=now,
-        )
-
-    self_id = await upsert_entity(db, etype="self", name="我", aliases=["用户", "自己"], now=now)
-    user_rows = await (await db.execute(
-        "SELECT key, value, source, created_at, updated_at FROM user_memory LIMIT 500"
-    )).fetchall()
-    for row in user_rows:
-        text = f"{row['key']}: {row['value']}"
-        exists = await (await db.execute(
-            "SELECT 1 FROM facts WHERE text=? AND source=? LIMIT 1",
-            (text, row["source"] or "user_told"),
-        )).fetchone()
-        if exists:
-            continue
-        await create_fact(
-            db,
-            entity_id=self_id,
-            text=text,
-            source=row["source"] or "user_told",
-            confidence=0.9,
-            now=row["updated_at"] or row["created_at"] or now,
-        )
-
-    await backfill_kb_fts(db)
-
-
-def _weekday_from_iso(value: str | None) -> int | None:
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except Exception:
-        return None
-    return dt.isoweekday()
+    await migrate_legacy_knowledge(db)

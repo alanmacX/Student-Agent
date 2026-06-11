@@ -208,17 +208,19 @@ async def create_fact(
 
 async def backfill_kb_fts(db: aiosqlite.Connection) -> None:
     try:
-        row = await (await db.execute("SELECT COUNT(*) FROM kb_fts LIMIT 1")).fetchone()
-        if row and row[0] > 0:
-            return
+        exists = await (await db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kb_fts'"
+        )).fetchone()
     except Exception:
+        return
+    if not exists:
         return
 
     db.row_factory = aiosqlite.Row
     items = await (await db.execute(
         """SELECT id FROM chaoxing_memory_entries
            WHERE archived_at IS NULL AND COALESCE(status, 'active')='active'
-           LIMIT 500"""
+           LIMIT 1000"""
     )).fetchall()
     for row in items:
         await sync_item_fts(db, row["id"])
@@ -230,6 +232,196 @@ async def backfill_kb_fts(db: aiosqlite.Connection) -> None:
     facts = await (await db.execute("SELECT id FROM facts WHERE archived_at IS NULL LIMIT 500")).fetchall()
     for row in facts:
         await sync_fact_fts(db, row["id"])
+
+
+async def migrate_legacy_knowledge(db: aiosqlite.Connection) -> dict[str, int]:
+    """Bridge legacy memory rows into the phase-2 knowledge model.
+
+    This is intentionally conservative and idempotent: it creates only entities
+    we can infer from existing structured/local data, links legacy items to
+    those entities, and rebuilds FTS docs. It never deletes business rows.
+    """
+    now = utc_now_iso()
+    db.row_factory = aiosqlite.Row
+    counts = {
+        "entities_upserted": 0,
+        "facts_copied": 0,
+        "items_linked": 0,
+        "raw_refs_filled": 0,
+        "fts_synced": 0,
+    }
+
+    # Structured course sources are trustworthy entity seeds.
+    course_sources: dict[str, dict[str, Any]] = {}
+
+    rows = await (await db.execute(
+        """SELECT title, location, notes, MIN(start_at) AS first_start
+           FROM server_courses
+           WHERE title IS NOT NULL AND title != ''
+           GROUP BY title
+           LIMIT 500"""
+    )).fetchall()
+    for row in rows:
+        attrs = _clean_attrs({
+            "location": row["location"],
+            "notes": row["notes"],
+            "weekday": _weekday_from_iso(row["first_start"]),
+        })
+        course_sources.setdefault(row["title"], {}).update(attrs)
+
+    try:
+        rows = await (await db.execute(
+            """SELECT name, teacher FROM chaoxing_courses
+               WHERE name IS NOT NULL AND name != ''
+               LIMIT 500"""
+        )).fetchall()
+        for row in rows:
+            attrs = _clean_attrs({"teacher": row["teacher"]})
+            course_sources.setdefault(row["name"], {}).update(attrs)
+    except Exception:
+        pass
+
+    try:
+        rows = await (await db.execute(
+            """SELECT DISTINCT course_name FROM chaoxing_assignments
+               WHERE course_name IS NOT NULL AND course_name != ''
+               LIMIT 500"""
+        )).fetchall()
+        for row in rows:
+            course_sources.setdefault(row["course_name"], {})
+    except Exception:
+        pass
+
+    # Legacy memory often kept the course name only in conversation metadata.
+    memory_rows = await (await db.execute(
+        """SELECT id, title, kind, category, conversation_name,
+                  conversation_names_json, entity_id, source_message_id,
+                  source_ids_json, raw_ref, archived_at, status
+           FROM chaoxing_memory_entries
+           LIMIT 1500"""
+    )).fetchall()
+    for row in memory_rows:
+        if row["kind"] in {"assignment", "course", "exam"}:
+            for name in _candidate_course_names(row):
+                course_sources.setdefault(name, {})
+
+    course_name_to_id: dict[str, str] = {}
+    for name, attrs in course_sources.items():
+        clean = (name or "").strip()
+        if not clean:
+            continue
+        eid = await upsert_entity(db, etype="course", name=clean, attrs=attrs, now=now)
+        course_name_to_id[clean] = eid
+        counts["entities_upserted"] += 1
+
+    self_id = await upsert_entity(db, etype="self", name="我", aliases=["用户", "自己"], now=now)
+    counts["entities_upserted"] += 1
+
+    user_rows = await (await db.execute(
+        "SELECT key, value, source, created_at, updated_at FROM user_memory LIMIT 1000"
+    )).fetchall()
+    for row in user_rows:
+        text = f"{row['key']}: {row['value']}"
+        exists = await (await db.execute(
+            "SELECT 1 FROM facts WHERE text=? AND source=? LIMIT 1",
+            (text, row["source"] or "user_told"),
+        )).fetchone()
+        if exists:
+            continue
+        await create_fact(
+            db,
+            entity_id=self_id,
+            text=text,
+            source=row["source"] or "user_told",
+            confidence=0.9,
+            now=row["updated_at"] or row["created_at"] or now,
+        )
+        counts["facts_copied"] += 1
+
+    for row in memory_rows:
+        updates: list[str] = []
+        params: list[Any] = []
+        if row["archived_at"] and (row["status"] or "active") == "active":
+            updates.append("status='expired'")
+        elif not row["status"]:
+            updates.append("status='active'")
+
+        raw_ref = row["raw_ref"] or row["source_message_id"] or _first_json_value(row["source_ids_json"])
+        if raw_ref and not row["raw_ref"]:
+            updates.append("raw_ref=?")
+            params.append(raw_ref)
+            counts["raw_refs_filled"] += 1
+
+        if not row["entity_id"]:
+            entity_id = _match_entity_for_memory(row, course_name_to_id)
+            if entity_id:
+                updates.append("entity_id=?")
+                params.append(entity_id)
+                counts["items_linked"] += 1
+
+        if updates:
+            updates.append("updated_at=COALESCE(updated_at, ?)")
+            params.extend([now, row["id"]])
+            await db.execute(
+                f"UPDATE chaoxing_memory_entries SET {', '.join(updates)} WHERE id=?",
+                params,
+            )
+
+    await backfill_kb_fts(db)
+    try:
+        row = await (await db.execute("SELECT COUNT(*) FROM kb_fts")).fetchone()
+        counts["fts_synced"] = int(row[0] or 0)
+    except Exception:
+        pass
+    await db.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        ("legacy_kb_backfill_last", json.dumps({"at": now, **counts}, ensure_ascii=False)),
+    )
+    return counts
+
+
+def _candidate_course_names(row: aiosqlite.Row) -> list[str]:
+    names: list[str] = []
+    if row["conversation_name"]:
+        names.append(row["conversation_name"])
+    names.extend(_loads_list(row["conversation_names_json"]))
+    if row["kind"] == "course" and row["title"]:
+        names.append(row["title"])
+    return [
+        n.strip()
+        for n in dict.fromkeys(names)
+        if n and n.strip() and len(n.strip()) <= 80
+    ]
+
+
+def _match_entity_for_memory(row: aiosqlite.Row, course_name_to_id: dict[str, str]) -> str | None:
+    for name in _candidate_course_names(row):
+        if name in course_name_to_id:
+            return course_name_to_id[name]
+    title = row["title"] or ""
+    for name, eid in course_name_to_id.items():
+        if name and (name in title or title in name):
+            return eid
+    return None
+
+
+def _first_json_value(raw: str | None) -> str | None:
+    values = _loads_list(raw)
+    return values[0] if values else None
+
+
+def _clean_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in attrs.items() if v not in (None, "", [])}
+
+
+def _weekday_from_iso(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    return dt.isoweekday()
 
 
 def _loads_list(raw: str | None) -> list[str]:
