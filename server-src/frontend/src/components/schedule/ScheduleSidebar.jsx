@@ -4,6 +4,29 @@ import { fetchScheduleSidebar } from "../../api/schedule";
 import { syncChaoxingMemory } from "../../api/chaoxing";
 import MemoryDetailDrawer from "./MemoryDetailDrawer";
 
+function deadlineColor(dueDate) {
+  if (!dueDate) return "text-[var(--text-tertiary)]";
+  const diff = new Date(dueDate).getTime() - Date.now();
+  if (diff < 0) return "text-red-400";
+  if (diff < 24 * 3600 * 1000) return "text-orange-400";
+  if (diff < 72 * 3600 * 1000) return "text-yellow-400";
+  return "text-[var(--text-tertiary)]";
+}
+
+function formatCountdown(dueDate) {
+  if (!dueDate) return null;
+  const diff = new Date(dueDate).getTime() - Date.now();
+  const abs = Math.abs(diff);
+  const hours = Math.floor(abs / 3600000);
+  const days = Math.floor(hours / 24);
+  const remainHours = hours % 24;
+  if (diff < 0) return `逾期 ${days > 0 ? `${days}天` : `${hours}h`}`;
+  if (days > 0) return `${days}天${remainHours > 0 ? `${remainHours}h` : ""}后`;
+  if (hours > 0) return `${hours}h 后`;
+  const mins = Math.floor(abs / 60000);
+  return `${mins}min 后`;
+}
+
 export default function ScheduleSidebar({ mobile = false }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -50,9 +73,53 @@ export default function ScheduleSidebar({ mobile = false }) {
     );
   }
 
+  const assignments = (data?.assignments || [])
+    .slice()
+    .sort((a, b) => {
+      if (!a.dueDate && !b.dueDate) return 0;
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return new Date(a.dueDate) - new Date(b.dueDate);
+    });
+
   return (
     <>
     <div className={`h-full space-y-3 overflow-y-auto bg-[var(--sidebar-bg)] p-3 ${mobile ? "" : "w-80 border-l border-[var(--border)]"}`}>
+
+      {/* Assignments / DDL */}
+      <Section
+        sectionKey="assignments"
+        icon={ClipboardList}
+        title="学习通 DDL"
+        count={assignments.length}
+        collapsed={collapsed}
+        onToggle={toggle}
+      >
+        {assignments.length ? (
+          assignments.map((a) => {
+            const color = deadlineColor(a.dueDate);
+            const countdown = formatCountdown(a.dueDate);
+            return (
+              <div key={a.id} className="px-3 py-2 border-b border-[var(--border)] last:border-0">
+                <p className="text-sm leading-5 text-[var(--text-secondary)]">{a.title}</p>
+                <div className="mt-0.5 flex items-center gap-2">
+                  <span className="text-xs text-[var(--text-tertiary)] truncate">{a.courseName}</span>
+                  {countdown && (
+                    <span className={`ml-auto flex shrink-0 items-center gap-0.5 text-[11px] font-medium ${color}`}>
+                      <Clock size={10} />
+                      {countdown}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <p className="px-3 py-2 text-xs text-[var(--text-tertiary)]">
+            {data?.courses?.length > 0 || data?.assignments !== undefined ? "暂无待交作业" : "未登录学习通"}
+          </p>
+        )}
+      </Section>
 
       {/* Memory Insights */}
       <Section
@@ -78,15 +145,14 @@ export default function ScheduleSidebar({ mobile = false }) {
             <button
               key={m.id}
               onClick={() => setSelectedMemory(m)}
-              title={m.title}
-              className="w-full text-left px-3 py-2.5 border-b border-[var(--border)] last:border-0 hover:bg-[var(--hover-bg)] transition-colors"
+              className="w-full text-left px-3 py-2 border-b border-[var(--border)] last:border-0 hover:bg-[var(--hover-bg)] transition-colors"
             >
-              <div className="flex items-center gap-2">
-                <span className={`h-2 w-2 shrink-0 rounded-full ${m.importance === "high" ? "bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.5)]" : "bg-yellow-500"}`} />
-                <p className="text-[13px] font-medium text-[var(--text-secondary)] truncate">{m.title}</p>
+              <div className="flex items-center gap-1.5">
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.importance === "high" ? "bg-red-500" : "bg-yellow-500"}`} />
+                <p className="text-sm text-[var(--text-secondary)] truncate">{m.title}</p>
               </div>
-              {m.summary && <p className="ml-4 mt-0.5 text-xs text-[var(--text-tertiary)] line-clamp-2 leading-relaxed">{m.summary}</p>}
-              {m.action_hint && <p className="ml-4 mt-1 text-xs text-[var(--accent-soft)] leading-relaxed">{m.action_hint}</p>}
+              {m.summary && <p className="ml-3 text-xs text-[var(--text-tertiary)] line-clamp-2">{m.summary}</p>}
+              {m.action_hint && <p className="ml-3 mt-0.5 text-xs text-[var(--accent-soft)]">{m.action_hint}</p>}
             </button>
           ))
         ) : (
@@ -163,14 +229,14 @@ function StatusRow({ icon, label, value, color }) {
 function Section({ sectionKey, icon: Icon, title, count, collapsed, onToggle, action, children }) {
   const isCollapsed = collapsed[sectionKey];
   return (
-    <section className="overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface-2)]">
+    <section className="overflow-hidden rounded-[20px] border border-[var(--border)] bg-[var(--surface)]">
       <button
         onClick={() => onToggle(sectionKey)}
-        className="flex w-full items-center justify-between rounded-t-[20px] px-3.5 py-3 transition-colors hover:bg-[var(--hover-bg)]"
+        className="flex w-full items-center justify-between rounded-t-[20px] px-3.5 py-2.5 transition-colors hover:bg-[var(--hover-bg)]"
       >
         <div className="flex items-center gap-2">
-          <Icon size={13} className="text-[var(--text-tertiary)]" />
-          <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-tertiary)]">{title}</span>
+          <Icon size={14} className="text-[var(--text-tertiary)]" />
+          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">{title}</span>
           {count > 0 && (
             <span className="rounded-full bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-tertiary)]">
               {count}

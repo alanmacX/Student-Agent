@@ -1,9 +1,27 @@
 import { useState, useEffect, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { Copy, Check, ChevronDown, ChevronRight, Brain } from "lucide-react";
 import ToolCallBubble from "./ToolCallBubble";
 import SchedulePayloadView from "../schedule/SchedulePayloadView";
+
+// Allow the agent to emit compact inline HTML (cards, grids, colored tags) while
+// stripping anything dangerous. LLM output can echo untrusted group-message text,
+// so we sanitize: no scripts/iframes/event handlers, but keep class + inline style
+// and the structural/formatting tags needed for a tidy layout.
+const HTML_SCHEMA = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    "*": [...(defaultSchema.attributes?.["*"] || []), "className", "class", "style"],
+  },
+  tagNames: [
+    ...(defaultSchema.tagNames || []),
+    "div", "span", "section", "small", "details", "summary",
+  ],
+};
 
 export default function MessageBubble({ message, onConfirm, onCancel }) {
   const [copied, setCopied] = useState(false);
@@ -88,7 +106,10 @@ export default function MessageBubble({ message, onConfirm, onCancel }) {
         )}
 
         <div className={`markdown-body max-w-none break-words text-[15px] leading-7 ${isUser ? "markdown-user" : ""}`}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeRaw, [rehypeSanitize, HTML_SCHEMA]]}
+          >{message.content}</ReactMarkdown>
         </div>
 
         {!isUser && schedulePayload && <SchedulePayloadView payload={schedulePayload} />}

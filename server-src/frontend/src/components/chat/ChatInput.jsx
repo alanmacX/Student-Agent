@@ -164,7 +164,7 @@ export default function ChatInput({
 
       {/* ── Desktop bar ─────────────────────────────────────────────── */}
       <div className="hidden md:block border-t border-[var(--glass-border)] bg-[var(--tab-float-bg)] px-4 pb-3 pt-3 backdrop-blur-xl saturate-150">
-        <div className="mx-auto flex max-w-4xl items-end gap-2 relative">
+        <div className="mx-auto flex max-w-3xl items-end gap-2 relative">
           {/* Command palette — desktop */}
           {showPalette && (
             <div className="absolute bottom-full left-0 mb-2 w-80 max-h-48 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--panel-bg)] shadow-xl shadow-black/30 backdrop-blur-xl z-50">
@@ -216,12 +216,6 @@ export default function ChatInput({
             </button>
           )}
         </div>
-        {/* Desktop keyboard hint */}
-        {!isStreaming && (
-          <p className="mx-auto mt-1.5 max-w-4xl text-right text-[10px] text-[var(--text-tertiary)] opacity-50 select-none">
-            Enter 发送 · Shift+Enter 换行 · / 命令
-          </p>
-        )}
       </div>
     </>
   );

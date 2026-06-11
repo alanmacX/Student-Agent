@@ -1,12 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { PanelRight, PanelRightClose, Trash2, X, Upload, Plus, MessageSquare } from "lucide-react";
+import { Trash2, X, Upload, Plus, MessageSquare } from "lucide-react";
 import { useSSEStream } from "../../hooks/useSSEStream";
 import { useScheduleSessions } from "../../hooks/useScheduleSessions";
 import { apiFetch } from "../../api/client";
 import { createReminder } from "../../api/reminders";
 import MessageBubble from "../chat/MessageBubble";
 import ChatInput from "../chat/ChatInput";
-import ScheduleSidebar from "./ScheduleSidebar";
 import ImportModal from "./ImportModal";
 
 const AUTO_NEW_SESSION_MS = 30 * 60 * 1000; // 30 minutes
@@ -65,29 +64,23 @@ function SessionItem({ session, active, onSelect, onDelete }) {
   return (
     <button
       onClick={() => onSelect(session)}
-      title={session.title}
-      className={`group relative flex w-full items-center gap-2.5 rounded-[14px] px-3 py-[9px] text-left transition-all duration-200 ease-[var(--ease-smooth)] ${
+      className={`group relative flex w-full items-start gap-2 rounded-[14px] px-3 py-2.5 text-left transition-all duration-200 ease-[var(--ease-smooth)] ${
         active
-          ? "bg-[var(--hover-bg)] text-white"
-          : "text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-white"
+          ? "bg-[var(--accent)]/15 text-white"
+          : "text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] hover:text-white"
       }`}
     >
-      {/* Active indicator */}
-      {active && (
-        <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-[var(--accent)]" />
-      )}
-      <MessageSquare size={13} className="shrink-0 opacity-50" />
-      <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-snug">{session.title}</span>
+      <MessageSquare size={14} className="mt-0.5 shrink-0 opacity-60" />
+      <span className="min-w-0 flex-1 truncate text-xs">{session.title}</span>
       <span
         onClick={handleDelete}
-        title={confirming ? "再次点击确认删除" : "删除"}
-        className={`ml-0.5 shrink-0 rounded-md p-1 transition-all ${
+        className={`ml-1 shrink-0 rounded p-0.5 transition-colors ${
           confirming
-            ? "bg-red-500/15 text-red-400 opacity-100"
-            : "opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:bg-[var(--hover-bg)] text-[var(--text-tertiary)]"
+            ? "text-red-400 opacity-100"
+            : "opacity-0 group-hover:opacity-60 hover:!opacity-100 text-[var(--text-tertiary)]"
         }`}
       >
-        <Trash2 size={11} />
+        <Trash2 size={12} />
       </span>
     </button>
   );
@@ -96,23 +89,23 @@ function SessionItem({ session, active, onSelect, onDelete }) {
 // ── Sessions panel ────────────────────────────────────────────────────────────
 function SessionsPanel({ sessions, activeId, onSelect, onCreate, onDelete }) {
   return (
-    <div className="flex h-full w-[220px] flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)]">
+    <div className="flex h-full w-[200px] flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)]">
       {/* Header */}
-      <div className="flex items-center justify-between px-3.5 py-3.5 border-b border-[var(--border)]">
-        <span className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-widest">对话</span>
+      <div className="flex items-center justify-between px-3 py-3 border-b border-[var(--border)]">
+        <span className="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wide">对话</span>
         <button
           onClick={onCreate}
           className="grid h-7 w-7 place-items-center rounded-full text-[var(--text-secondary)] transition-all duration-200 ease-[var(--ease-spring)] hover:bg-[var(--hover-bg)] hover:text-white active:scale-90"
-          title="新对话 (⌘N)"
+          title="新对话"
         >
-          <Plus size={14} />
+          <Plus size={15} />
         </button>
       </div>
 
       {/* Session list */}
-      <div className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
+      <div className="flex-1 overflow-y-auto py-1.5 px-1.5 space-y-0.5">
         {sessions.length === 0 && (
-          <p className="px-3 py-6 text-center text-xs text-[var(--text-tertiary)]">暂无对话</p>
+          <p className="px-3 py-4 text-center text-xs text-[var(--text-tertiary)]">暂无对话</p>
         )}
         {sessions.map((s) => (
           <SessionItem
@@ -146,8 +139,6 @@ function mergePayload(existing, incoming) {
 export default function ScheduleView() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(false);
   const [sessionsDrawerOpen, setSessionsDrawerOpen] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [agentStatus, setAgentStatus] = useState("处理中...");
@@ -353,18 +344,6 @@ export default function ScheduleView() {
     return session;
   }, [createSession]);
 
-  // ⌘N / Ctrl+N = new session (desktop)
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "n") {
-        e.preventDefault();
-        handleCreateSession();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleCreateSession]);
-
   const handleDeleteSession = useCallback(async (id) => {
     await deleteSession(id);
     if (activeSession?.id === id) {
@@ -533,18 +512,6 @@ export default function ScheduleView() {
           </div>
 
           {/* Floating circle action buttons */}
-          {/* Mobile: open drawer */}
-          <CircleButton onClick={() => setSidebarOpen(true)} title="打开日程侧栏" className="lg:hidden">
-            <PanelRight size={16} />
-          </CircleButton>
-          {/* Desktop: toggle right sidebar */}
-          <CircleButton
-            onClick={() => setDesktopSidebarOpen((v) => !v)}
-            title={desktopSidebarOpen ? "收起侧栏" : "展开侧栏"}
-            className="hidden lg:grid"
-          >
-            {desktopSidebarOpen ? <PanelRightClose size={16} /> : <PanelRight size={16} />}
-          </CircleButton>
           <CircleButton onClick={() => setShowImport(true)} title="导入课程表">
             <Upload size={15} />
           </CircleButton>
@@ -618,37 +585,9 @@ export default function ScheduleView() {
         />
       </div>
 
-      {/* Schedule sidebar — desktop (toggle) */}
-      {desktopSidebarOpen && (
-        <div className="hidden lg:block">
-          <ScheduleSidebar />
-        </div>
-      )}
-
       {/* Import modal */}
       {showImport && (
         <ImportModal onClose={() => setShowImport(false)} onImported={() => setShowImport(false)} />
-      )}
-
-      {/* Mobile: schedule sidebar drawer */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-40 bg-[var(--overlay-bg)] backdrop-blur-sm lg:hidden">
-          <div className="absolute inset-y-0 right-0 flex w-[88vw] max-w-[360px] flex-col border-l border-[var(--border)] bg-[var(--sidebar-bg)] shadow-2xl">
-            <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
-              <div>
-                <p className="text-sm font-semibold">日程侧栏</p>
-                <p className="text-xs text-[var(--text-tertiary)]">作业、Memory</p>
-              </div>
-              <button
-                onClick={() => setSidebarOpen(false)}
-                className="grid h-9 w-9 place-items-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--hover-bg)]"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <ScheduleSidebar mobile />
-          </div>
-        </div>
       )}
 
       {/* Mobile: sessions drawer */}
