@@ -49,6 +49,17 @@ _SCHEMA = """
         value TEXT
     );
 
+    -- Standalone "ideas" scratchpad: user-captured thoughts. Deliberately NOT
+    -- part of the message/memory pipeline — only created by explicit user action
+    -- (UI or asking the agent), freely editable/deletable, queryable on demand.
+    CREATE TABLE IF NOT EXISTS ideas (
+        id          TEXT PRIMARY KEY,
+        text        TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        archived_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS conversations (
         id                              TEXT PRIMARY KEY,
         title                           TEXT NOT NULL DEFAULT 'New Chat',

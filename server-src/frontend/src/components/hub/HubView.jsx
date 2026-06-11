@@ -3,22 +3,8 @@ import { Activity, CalendarDays, CalendarRange, CheckCircle2, Clock, Lightbulb, 
 import { apiFetch } from "../../api/client";
 import RemindersPanel from "../settings/RemindersPanel";
 
-const STORAGE_KEY = "hub_quick_notes";
-
-function loadNotes() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-  } catch {
-    return [];
-  }
-}
-
-function saveNotes(notes) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
-}
-
 export default function HubView() {
-  const [notes, setNotes] = useState(loadNotes);
+  const [notes, setNotes] = useState([]);
   const [input, setInput] = useState("");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -34,24 +20,39 @@ export default function HubView() {
     }
   };
 
-  const addNote = () => {
-    const text = input.trim();
-    if (!text) return;
-    const updated = [{ id: Date.now(), text, created: new Date().toISOString() }, ...notes];
-    setNotes(updated);
-    saveNotes(updated);
-    setInput("");
+  const loadIdeas = async () => {
+    try {
+      setNotes(await apiFetch("/api/ideas"));
+    } catch (e) {
+      console.error("Failed to load ideas:", e);
+    }
   };
 
-  const deleteNote = (id) => {
-    const updated = notes.filter((n) => n.id !== id);
-    setNotes(updated);
-    saveNotes(updated);
+  const addNote = async () => {
+    const text = input.trim();
+    if (!text) return;
+    setInput("");
+    try {
+      const created = await apiFetch("/api/ideas", { method: "POST", body: JSON.stringify({ text }) });
+      if (created?.id) setNotes((prev) => [created, ...prev]);
+    } catch (e) {
+      console.error("Failed to save idea:", e);
+    }
+  };
+
+  const deleteNote = async (id) => {
+    setNotes((prev) => prev.filter((n) => n.id !== id));
+    try {
+      await apiFetch(`/api/ideas/${id}`, { method: "DELETE" });
+    } catch (e) {
+      console.error("Failed to delete idea:", e);
+    }
   };
 
   useEffect(() => {
     refreshDashboard();
-    const handler = () => refreshDashboard();
+    loadIdeas();
+    const handler = () => { refreshDashboard(); loadIdeas(); };
     window.addEventListener("app-refresh", handler);
     return () => window.removeEventListener("app-refresh", handler);
   }, []);
@@ -103,7 +104,7 @@ export default function HubView() {
             <div className="mb-3 flex items-center gap-2">
               <StickyNote size={14} className="text-[var(--accent)]" />
               <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-tertiary)]">
-                快速记录
+                点子库
               </h3>
             </div>
             <div className="flex gap-2">
@@ -111,7 +112,7 @@ export default function HubView() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && addNote()}
-                placeholder="记下你的想法..."
+                placeholder="记个点子，想要时再来看…"
                 className="glass-input flex-1 rounded-xl px-3 py-2 text-sm"
               />
               <button

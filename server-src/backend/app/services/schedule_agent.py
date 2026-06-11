@@ -780,6 +780,23 @@ def _build_schedule_tools() -> list:
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         ),
         ToolDefinition(
+            name="save_idea",
+            description="把用户随口想到的一个小点子/灵感单独存进「点子库」。当用户说'记个点子'、'我有个想法'、'帮我记下这个 idea'时调用。点子库独立于日常信息，不参与提醒和自动更新，用户随时可看可删。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "点子内容，原样保留用户的措辞"},
+                },
+                "required": ["text"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
+            name="list_ideas",
+            description="列出「点子库」里的点子。当用户问'我之前记了哪些点子'、'看看我的想法'或想从点子里找灵感时调用。",
+            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        ToolDefinition(
             name="save_memory",
             description="保存用户偏好、习惯或上下文信息到长期记忆。当用户说'记住XXX'、'我喜欢XXX'、'我习惯XXX'时调用。",
             input_schema={
@@ -1329,6 +1346,29 @@ async def _execute_schedule_tool(
         if interval:
             parts.append(f"standby 间隔改为 {interval} 分钟")
         return json.dumps({"ok": True, "message": "；".join(parts) or "配置已更新。"})
+    elif tc.name == "save_idea":
+        import uuid as _uuid
+        text = tc.arguments.get("text", "").strip()
+        if not text:
+            return "错误: 点子内容不能为空"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                "INSERT INTO ideas (id, text, created_at, updated_at) VALUES (?,?,?,?)",
+                ("idea_" + _uuid.uuid4().hex[:10], text, now_iso, now_iso),
+            )
+            await db.commit()
+        return json.dumps({"ok": True, "message": f"已记进点子库：{text}"}, ensure_ascii=False)
+    elif tc.name == "list_ideas":
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (await db.execute(
+                "SELECT id, text, updated_at FROM ideas WHERE archived_at IS NULL "
+                "ORDER BY updated_at DESC LIMIT 100"
+            )).fetchall()
+        if not rows:
+            return "点子库是空的。"
+        return json.dumps({"ok": True, "ideas": [dict(r) for r in rows]}, ensure_ascii=False)
     elif tc.name == "save_memory":
         key = tc.arguments.get("key", "").strip()
         value = tc.arguments.get("value", "").strip()
