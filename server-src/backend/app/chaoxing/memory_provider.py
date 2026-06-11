@@ -3,7 +3,7 @@
 Chaoxing → Memory integration.
 
 Converts Chaoxing messages (after filter_messages dedup) into NormalisedMessage
-format and feeds them through the universal engine.process_message().
+format and feeds them through the context-bounded Reconciler.
 
 Replaces app/services/memory_agent.run_memory_agent() for the LLM extraction step.
 The non-LLM structured sync (assignments, courses, reminders) stays in memory_sync.
@@ -14,8 +14,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from app.memory.engine import process_message, NormalisedMessage
-from app.memory.base import MemoryRepository
+from app.services.reconciler import reconcile_message
+NormalisedMessage = dict
 
 logger = logging.getLogger("chaoxing.memory")
 
@@ -46,7 +46,7 @@ async def run_chaoxing_memory_sync(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """
-    Fetch new Chaoxing messages, run them through the universal AutomationEngine.
+    Fetch new Chaoxing messages, run them through the context-bounded Reconciler.
     Replaces run_memory_agent() in the chaoxing probe loop.
     """
     if now is None:
@@ -105,7 +105,6 @@ async def run_chaoxing_memory_sync(
 
     logger.info("Chaoxing memory: %d candidates to process", len(candidates))
 
-    repo = MemoryRepository(db_path)
     new_entry_ids: list[str] = []
     processed_ids: list[str] = []
     errors: list[str] = []
@@ -115,11 +114,11 @@ async def run_chaoxing_memory_sync(
         if not msg["text"].strip():
             continue
         try:
-            result = await process_message(msg, db_path, provider, model, api_key, now)
+            result = await reconcile_message(msg, db_path, provider, model, api_key, now)
             new_entry_ids.extend(result.memory_upserted)
             processed_ids.append(msg["mid"])
         except Exception as e:
-            logger.warning("process_message failed for %s: %s", msg["mid"], e)
+            logger.warning("reconcile_message failed for %s: %s", msg["mid"], e)
             errors.append(str(e))
 
     # Only advance the sync cursor if processing succeeded (so failures can retry)

@@ -111,6 +111,11 @@ async def reduce_memory(
                 await _annotate_assignment_entry(db, entry_id, linked_assignment_key, action_hint, now)
 
         archived_by_sweep = await _sweep_memory_conn(db, now)
+        if changed_ids or archived_by_sweep:
+            from app.services.knowledge import sync_item_fts
+
+            for mid in list(dict.fromkeys(changed_ids + archived_by_sweep)):
+                await sync_item_fts(db, mid)
         await db.commit()
     if archived_by_sweep:
         from app.services.ladder import cancel_ladder_for_item
@@ -301,6 +306,11 @@ async def _update_memory_entry(db, existing, item, messages, now, expires_at, co
 async def sweep_memory(db_path: str, now: datetime) -> None:
     async with aiosqlite.connect(db_path) as db:
         archived_ids = await _sweep_memory_conn(db, now)
+        if archived_ids:
+            from app.services.knowledge import sync_item_fts
+
+            for mid in archived_ids:
+                await sync_item_fts(db, mid)
         await db.commit()
     if archived_ids:
         from app.services.ladder import cancel_ladder_for_item

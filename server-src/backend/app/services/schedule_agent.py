@@ -419,6 +419,38 @@ def _build_schedule_tools() -> list:
             },
         ),
         ToolDefinition(
+            name="list_watches",
+            description="列出用户正在关注/追踪的关键词、比赛、项目或通知主题。",
+            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        ToolDefinition(
+            name="create_watch",
+            description="创建一个关注项。用户要求关注、追踪、留意某类消息时调用。需要用户确认。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "关注项名称，如 蓝桥杯、数学建模、保研通知"},
+                    "keywords": {"type": "array", "items": {"type": "string"}, "description": "触发关键词"},
+                    "until": {"type": "string", "description": "ISO8601 到期时间，可为空"},
+                    "note": {"type": "string", "description": "关注原因或补充说明"},
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
+            name="delete_watch",
+            description="删除/停止一个关注项。需要用户确认。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "watch entity id"},
+                    "name": {"type": "string", "description": "不知道 id 时可按名称删除"},
+                },
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
             name="list_reminders",
             description="读取服务器维护的提醒事项列表",
             input_schema={
@@ -820,11 +852,91 @@ async def _execute_schedule_tool(
                    WHERE id=?""",
                 (now_iso, now_iso, memory_id),
             )
+            if cur.rowcount > 0:
+                from app.services.knowledge import sync_item_fts
+
+                await sync_item_fts(db, memory_id)
             await db.commit()
         if cur.rowcount > 0:
             from app.services.ladder import cancel_ladder_for_item
 
             await cancel_ladder_for_item(db_path, memory_id)
+        return json.dumps({"ok": cur.rowcount > 0}, ensure_ascii=False)
+    elif tc.name == "list_watches":
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (await db.execute(
+                """SELECT id, name, aliases, attrs, notes, updated_at
+                   FROM entities
+                   WHERE etype='watch' AND status='active'
+                   ORDER BY updated_at DESC"""
+            )).fetchall()
+        return json.dumps({"ok": True, "watches": [dict(r) for r in rows]}, ensure_ascii=False)
+    elif tc.name == "create_watch":
+        confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
+        if confirmation:
+            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            return confirmation
+        from app.services.knowledge import upsert_entity
+
+        name = (tc.arguments.get("name") or "").strip()
+        if not name:
+            return "错误: 缺少关注项名称。"
+        attrs = {
+            "keywords": tc.arguments.get("keywords") or [name],
+            "until": tc.arguments.get("until"),
+            "note": tc.arguments.get("note") or "",
+        }
+        import datetime as _dt
+        now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        async with aiosqlite.connect(db_path) as db:
+            eid = await upsert_entity(
+                db,
+                etype="watch",
+                name=name,
+                aliases=[k for k in (tc.arguments.get("keywords") or []) if k and k != name],
+                attrs=attrs,
+                notes=tc.arguments.get("note") or "",
+                now=now_iso,
+            )
+            await db.commit()
+        return json.dumps({"ok": True, "id": eid, "name": name}, ensure_ascii=False)
+    elif tc.name == "delete_watch":
+        confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
+        if confirmation:
+            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            return confirmation
+        import datetime as _dt
+        from app.services.knowledge import sync_entity_fts
+
+        now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        watch_id = tc.arguments.get("id")
+        name = tc.arguments.get("name")
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if watch_id:
+                cur = await db.execute(
+                    "UPDATE entities SET status='archived', updated_at=? WHERE id=? AND etype='watch'",
+                    (now_iso, watch_id),
+                )
+                affected_id = watch_id
+            elif name:
+                row = await (await db.execute(
+                    "SELECT id FROM entities WHERE etype='watch' AND status='active' AND name=? LIMIT 1",
+                    (name,),
+                )).fetchone()
+                if not row:
+                    return json.dumps({"ok": False, "message": "未找到关注项"}, ensure_ascii=False)
+                affected_id = row["id"]
+                cur = await db.execute(
+                    "UPDATE entities SET status='archived', updated_at=? WHERE id=?",
+                    (now_iso, affected_id),
+                )
+            else:
+                return "错误: 缺少 id 或 name。"
+            if cur.rowcount > 0:
+                await sync_entity_fts(db, affected_id)
+            await db.commit()
         return json.dumps({"ok": cur.rowcount > 0}, ensure_ascii=False)
     elif tc.name == "list_reminders":
         from .schedule_store import list_reminders
@@ -1183,6 +1295,8 @@ _NEEDS_CONFIRMATION = {
     "create_reminder",
     "update_reminder",
     "delete_reminder",
+    "create_watch",
+    "delete_watch",
     "create_calendar_event",
     "update_calendar_event",
     "delete_calendar_event",
@@ -1465,6 +1579,8 @@ def _confirmed_result_text(tool_name: str, result: str) -> str:
         "update_reminder": "已更新提醒事项。",
         "complete_reminder": "已完成提醒事项。",
         "delete_reminder": "已删除提醒事项。",
+        "create_watch": "已创建关注项。",
+        "delete_watch": "已删除关注项。",
         "create_calendar_event": "已创建日历事件。",
         "update_calendar_event": "已更新日历事件。",
         "delete_calendar_event": "已删除日历事件。",

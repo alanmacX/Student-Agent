@@ -137,6 +137,10 @@ async def sync_to_memory(
                     "UPDATE chaoxing_memory_entries SET archived_at=?, status='expired', updated_at=? WHERE id=?",
                     [(ni, ni, mid) for mid in to_archive],
                 )
+                from app.services.knowledge import sync_item_fts
+
+                for mid in to_archive:
+                    await sync_item_fts(db, mid)
                 archived += len(to_archive)
             await db.commit()
         if to_archive:

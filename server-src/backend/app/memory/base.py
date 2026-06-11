@@ -207,6 +207,8 @@ class MemoryRepository:
             # Index high-signal keys for cross-source reconciliation + the
             # engine's "related entries" context. Idempotent (PK on key+id).
             await self._index_entity(db, eid, entry, expires_at)
+            from app.services.knowledge import sync_item_fts
+            await sync_item_fts(db, eid)
             await db.commit()
         if entry.for_automation or entry.importance == "high":
             try:
@@ -351,6 +353,11 @@ class MemoryRepository:
                 trimmed = len(trim_ids)
                 archived_ids.extend(trim_ids)
             # Cascade: drop topic-index rows whose memory entry no longer exists.
+            if archived_ids:
+                from app.services.knowledge import sync_item_fts
+
+                for mid in archived_ids:
+                    await sync_item_fts(db, mid)
             idx = await db.execute(
                 f"""DELETE FROM memory_topic_index
                     WHERE memory_id NOT IN (SELECT id FROM {_TABLE})"""

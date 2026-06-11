@@ -2,10 +2,8 @@
 
 DingTalk → Memory integration.
 
-Converts dingtalk_messages (verdict=notify/interest) into NormalisedMessage
-format and feeds them through the universal AutomationEngine.
-
-Adding a new source is this simple — just normalise + call process_message().
+Converts dingtalk_messages (verdict=notify/interest) into the normalized shape
+and feeds them through the context-bounded Reconciler.
 """
 from __future__ import annotations
 
@@ -15,7 +13,9 @@ from typing import Any
 
 import aiosqlite
 
-from app.memory.engine import process_message, NormalisedMessage
+from app.services.reconciler import reconcile_message
+
+NormalisedMessage = dict
 
 logger = logging.getLogger("dingtalk.memory")
 
@@ -66,7 +66,7 @@ async def run_dingtalk_memory_sync(
 ) -> dict[str, Any]:
     """
     Fetch new DingTalk notify messages since last sync and run them
-    through the universal AutomationEngine.
+    through the context-bounded reconciler.
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -98,7 +98,7 @@ async def run_dingtalk_memory_sync(
     processed = 0
     for raw in messages:
         msg = _normalise(raw)
-        result = await process_message(msg, db_path, provider, model, api_key, now)
+        result = await reconcile_message(msg, db_path, provider, model, api_key, now)
         if result.ok:
             total_effects += result.effects_applied
             processed += 1

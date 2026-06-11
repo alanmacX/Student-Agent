@@ -1,6 +1,7 @@
 from __future__ import annotations
 import aiosqlite
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from app.config import settings
 
 
@@ -39,6 +40,7 @@ async def run_migrations(db_path: str):
             INSERT OR IGNORE INTO custom_providers (id, data_json)
             VALUES ('xiaomimimo', '{"id":"xiaomimimo","name":"小米 MiMo","base_url":"https://token-plan-sgp.xiaomimimo.com/v1","api_type":"xiaomiMimo","models":["mimo-v2.5-pro"],"api_key":"","icon_name":"m-circle","color_hex":"FF6900"}')
         """)
+        await _seed_knowledge_base(db)
         await db.commit()
 
 
@@ -371,6 +373,42 @@ _COLUMN_MIGRATIONS: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_sched_notif_source "
     "ON scheduled_notifications(source_id, sent_at, cancelled_at)",
 
+    # ── Redesign phase 2 knowledge base ───────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS entities (
+        id          TEXT PRIMARY KEY,
+        etype       TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        aliases     TEXT NOT NULL DEFAULT '[]',
+        attrs       TEXT NOT NULL DEFAULT '{}',
+        notes       TEXT NOT NULL DEFAULT '',
+        status      TEXT NOT NULL DEFAULT 'active',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name)",
+    "CREATE INDEX IF NOT EXISTS idx_entities_type_status ON entities(etype, status)",
+    """CREATE TABLE IF NOT EXISTS facts (
+        id          TEXT PRIMARY KEY,
+        entity_id   TEXT,
+        text        TEXT NOT NULL,
+        source      TEXT NOT NULL,
+        confidence  REAL NOT NULL DEFAULT 0.8,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        archived_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_facts_entity ON facts(entity_id, archived_at)",
+    """CREATE VIRTUAL TABLE IF NOT EXISTS kb_fts USING fts5(
+        doc_id UNINDEXED, doc_type UNINDEXED, content, tokenize='unicode61'
+    )""",
+    """CREATE TABLE IF NOT EXISTS notification_feedback (
+        id TEXT PRIMARY KEY,
+        notif_tag TEXT,
+        item_id TEXT,
+        action TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+
     # ── notification delivery state ───────────────────────────────────────
     "ALTER TABLE notification_log ADD COLUMN device_received_at TEXT",
     "ALTER TABLE notification_log ADD COLUMN clicked_at TEXT",
@@ -403,3 +441,68 @@ _COLUMN_MIGRATIONS: list[str] = [
     )""",
     "INSERT OR IGNORE INTO dingtalk_filter_config (id) VALUES (1)",
 ]
+
+
+async def _seed_knowledge_base(db: aiosqlite.Connection) -> None:
+    from app.services.knowledge import backfill_kb_fts, create_fact, upsert_entity
+
+    now = datetime.now(timezone.utc).isoformat()
+    db.row_factory = aiosqlite.Row
+
+    courses = await (await db.execute(
+        """SELECT title, location, notes, MIN(start_at) AS first_start
+           FROM server_courses
+           WHERE title IS NOT NULL AND title != ''
+           GROUP BY title
+           LIMIT 200"""
+    )).fetchall()
+    for row in courses:
+        attrs = {}
+        if row["location"]:
+            attrs["location"] = row["location"]
+        if row["notes"]:
+            attrs["notes"] = row["notes"]
+        weekday = _weekday_from_iso(row["first_start"])
+        if weekday:
+            attrs["weekday"] = weekday
+        await upsert_entity(
+            db,
+            etype="course",
+            name=row["title"],
+            aliases=[],
+            attrs=attrs,
+            now=now,
+        )
+
+    self_id = await upsert_entity(db, etype="self", name="我", aliases=["用户", "自己"], now=now)
+    user_rows = await (await db.execute(
+        "SELECT key, value, source, created_at, updated_at FROM user_memory LIMIT 500"
+    )).fetchall()
+    for row in user_rows:
+        text = f"{row['key']}: {row['value']}"
+        exists = await (await db.execute(
+            "SELECT 1 FROM facts WHERE text=? AND source=? LIMIT 1",
+            (text, row["source"] or "user_told"),
+        )).fetchone()
+        if exists:
+            continue
+        await create_fact(
+            db,
+            entity_id=self_id,
+            text=text,
+            source=row["source"] or "user_told",
+            confidence=0.9,
+            now=row["updated_at"] or row["created_at"] or now,
+        )
+
+    await backfill_kb_fts(db)
+
+
+def _weekday_from_iso(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    return dt.isoweekday()

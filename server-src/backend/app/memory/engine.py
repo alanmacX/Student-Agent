@@ -438,11 +438,14 @@ async def _execute_effects(
             elif ef.type == EffectType.ARCHIVE_MEMORY:
                 ids = ef.params.get("resolved_ids") or []
                 async with aiosqlite.connect(db_path) as db:
+                    from app.services.knowledge import sync_item_fts
+
                     for mid in ids:
                         await db.execute(
                             "UPDATE chaoxing_memory_entries SET archived_at=?, status='superseded', updated_at=? WHERE id=?",
                             (now.isoformat(), now.isoformat(), mid),
                         )
+                        await sync_item_fts(db, mid)
                     await db.commit()
                 if ids:
                     from app.services.ladder import cancel_ladder_for_item

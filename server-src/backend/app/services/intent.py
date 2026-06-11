@@ -36,6 +36,7 @@ SYNONYMS: dict[str, list[str]] = {
     "刷新":   ["扫描", "重新扫", "重新拉", "更新一下", "拉一下", "refresh", "scan", "同步"],
     "系统":   ["status", "状态", "运行", "健康", "health", "cpu", "内存", "ram", "磁盘", "disk", "uptime", "standby"],
     "偏好":   ["习惯", "我喜欢", "我一般", "我通常", "记住"],
+    "关注":   ["追踪", "盯一下", "留意", "watch", "follow", "订阅"],
 }
 
 # ── Sub-agent routing (orchestrator_plan) ───────────────────────────────────
@@ -58,6 +59,9 @@ TOOL_KEYWORDS: dict[str, list[str]] = {
     "get_chaoxing_messages":         ["学习通", "原始消息", "群消息", "最近消息"],
     "read_dingtalk_messages":        ["钉钉", "群消息", "私信", "群聊"],
     "delete_message_memory":         ["删除记忆", "删除"],
+    "list_watches":                  ["关注", "列表"],
+    "create_watch":                  ["关注", "创建"],
+    "delete_watch":                  ["关注", "删除"],
     "list_reminders":                ["提醒", "清单"],
     "create_reminder":               ["创建", "提醒"],
     "update_reminder":               ["修改", "提醒"],
