@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     vapid_mailto: str = "mailto:admin@example.com"
     access_token: str = ""
+    zjut_key: str = ""  # base64 32-byte key for AES-GCM encrypting stored ZJUT credentials
 
     database_path: str = "/data/chatbot.db"
     chaoxing_sync_interval: int = 300

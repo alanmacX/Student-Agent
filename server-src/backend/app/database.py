@@ -60,6 +60,19 @@ _SCHEMA = """
         archived_at TEXT
     );
 
+    -- ZJUT 正方教务接入:单行配置 + (可选)AES-GCM 加密的凭据。
+    CREATE TABLE IF NOT EXISTS zjut_config (
+        id               INTEGER PRIMARY KEY CHECK (id = 1),
+        student_id       TEXT,
+        password_enc     TEXT,
+        year             TEXT,
+        term             TEXT,
+        week1_monday     TEXT,
+        save_credentials INTEGER NOT NULL DEFAULT 0,
+        last_import_at   TEXT,
+        updated_at       TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS conversations (
         id                              TEXT PRIMARY KEY,
         title                           TEXT NOT NULL DEFAULT 'New Chat',
