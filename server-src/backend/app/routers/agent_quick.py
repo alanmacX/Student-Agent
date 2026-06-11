@@ -28,11 +28,28 @@ from app.services.schedule_agent import (
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
+# Appended to the agent's system prompt only for the Siri/voice channel.
+VOICE_SYSTEM = (
+    "【语音通道】本次回复会被朗读出来。请用自然、连贯、像真人说话的一到两句中文回答，"
+    "不要为了简短而输出断断续续的词组或电报式短句；要把主语、动作和结果说完整，"
+    "语气可以亲近一点，像手机助手在顺口回应。绝对不要使用任何表情符号(emoji)、HTML、"
+    "Markdown、列表符号、星号或代码块；不要念 URL 或长 ID。日期时间用口语说法"
+    "(例如「明天下午三点」而不是 ISO 时间)。整体保持清楚、自然、适合直接朗读。"
+)
+
+# Emoji + symbol ranges that read badly aloud.
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF"
+    "\U00002190-\U000021FF\U00002B00-\U00002BFF\U0000FE00-\U0000FE0F\U00002700-\U000027BF]+"
+)
+
 
 def _voice_clean(text: str) -> str:
-    """Strip HTML/markdown so Siri speaks clean prose, not tags."""
+    """Strip HTML/markdown/emoji so Siri speaks clean prose."""
     text = re.sub(r"<[^>]+>", "", text)            # html tags
-    text = re.sub(r"[*_`#>|]", "", text)            # markdown markers
+    text = _EMOJI_RE.sub("", text)                  # emoji + arrows + dingbats
+    text = re.sub(r"(?m)^\s*[-*•·]\s+", "", text)   # leading list markers per line
+    text = re.sub(r"[*_`#>|•·]", "", text)          # inline markdown markers
     text = re.sub(r"\n{2,}", "\n", text)            # collapse blank lines
     text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
@@ -117,6 +134,7 @@ async def agent_ask(request: Request):
     async for event in run_schedule_agent(
         text, history, provider, model, api_key,
         chaoxing_svc, db_path, conversation_id=session_id,
+        extra_system=VOICE_SYSTEM,
     ):
         if event.get("type") == "text":
             reply += event.get("content", "")

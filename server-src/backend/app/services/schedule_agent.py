@@ -40,6 +40,7 @@ async def run_schedule_agent(
     db_path: str,
     thinking_budget: int = 0,
     conversation_id: str = "default",
+    extra_system: str = "",
 ) -> AsyncGenerator[dict, None]:
     from .agent_service import AgentMsg, ToolDefinition, run_agentic_loop
 
@@ -52,6 +53,8 @@ async def run_schedule_agent(
     reports = await collect_reports(plan, db_path, chaoxing_svc, now)
 
     merged_system = f"{dynamic_context}\n\n{system_prompt}\n\n{turn_context}"
+    if extra_system:
+        merged_system = f"{merged_system}\n\n{extra_system}"
 
     trimmed_history = history[-(10 * 2):]   # 10 turns is plenty; 20 bloats context
     messages = [AgentMsg(role="system", content=merged_system)]
