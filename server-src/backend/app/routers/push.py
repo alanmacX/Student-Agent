@@ -5,7 +5,8 @@ from app.database import db_conn
 from app.models import PushSubscribe, PushUnsubscribe
 from app.services.push_service import send_push_to_all_subscribers
 import json
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/push", tags=["push"])
 notifications_router = APIRouter(prefix="/api", tags=["notifications"])
@@ -33,7 +34,7 @@ async def subscribe(body: PushSubscribe):
     async with db_conn() as db:
         await db.execute(
             "INSERT OR IGNORE INTO push_subscriptions (endpoint, p256dh, auth, created_at) VALUES (?,?,?,?)",
-            (body.endpoint, body.keys.get("p256dh", ""), body.keys.get("auth", ""), datetime.utcnow().isoformat()),
+            (body.endpoint, body.keys.get("p256dh", ""), body.keys.get("auth", ""), datetime.now(timezone.utc).isoformat()),
         )
         await db.commit()
         return {"ok": True}
@@ -160,10 +161,60 @@ async def get_standby_log(limit: int = 30):
         return [dict(zip(columns, row)) for row in rows]
 
 
+@notifications_router.post("/notifications/feedback")
+async def notification_feedback(body: dict):
+    tag = (body.get("tag") or body.get("notif_tag") or "").strip()
+    item_id = (body.get("item_id") or "").strip() or _item_id_from_tag(tag)
+    action = (body.get("action") or "ack").strip()
+    source = (body.get("source") or "pwa").strip()
+    now = datetime.now(timezone.utc).isoformat()
+    feedback_id = f"fb_{uuid.uuid4().hex[:12]}"
+
+    async with db_conn() as db:
+        await db.execute(
+            """INSERT INTO notification_feedback
+               (id, notif_tag, item_id, action, source, data_json, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (
+                feedback_id,
+                tag or None,
+                item_id or None,
+                action,
+                source,
+                json.dumps(body, ensure_ascii=False),
+                now,
+            ),
+        )
+
+        changed = 0
+        if action in {"done", "complete", "finished"} and item_id:
+            cur = await db.execute(
+                """UPDATE chaoxing_memory_entries
+                   SET status='done',
+                       archived_at=COALESCE(archived_at, ?),
+                       updated_at=?
+                   WHERE id=?""",
+                (now, now, item_id),
+            )
+            changed = cur.rowcount
+            if changed:
+                from app.services.knowledge import sync_item_fts
+
+                await sync_item_fts(db, item_id)
+        await db.commit()
+
+    if action in {"done", "complete", "finished"} and item_id:
+        from app.services.ladder import cancel_ladder_for_item
+
+        await cancel_ladder_for_item(settings.database_path, item_id)
+
+    return {"ok": True, "id": feedback_id, "item_id": item_id or None, "changed": changed}
+
+
 async def _mark_delivery(tag: str | None, column: str):
     if not tag:
         return {"ok": False}
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     candidates = [tag]
     if tag.startswith("scheduled-"):
         candidates.append(tag.removeprefix("scheduled-"))
@@ -181,3 +232,13 @@ async def _mark_delivery(tag: str | None, column: str):
         )
         await db.commit()
     return {"ok": cur.rowcount > 0}
+
+
+def _item_id_from_tag(tag: str | None) -> str:
+    if not tag:
+        return ""
+    for prefix in ("scheduled-", "memory-", "standby-", "deadline-", "reconciler-", "item_update-", "item_cancel-"):
+        if tag.startswith(prefix):
+            return tag.removeprefix(prefix)
+    parts = tag.split("-", 1)
+    return parts[1] if len(parts) == 2 and parts[0] in {"agent", "conflict"} else ""

@@ -17,7 +17,11 @@ router = APIRouter(prefix="/api/providers", tags=["providers"])
 
 @router.get("")
 async def list_providers():
-    return await list_all_providers()
+    providers = await list_all_providers()
+    return {
+        "builtin": [_public_provider(p) for p in providers.get("builtin", [])],
+        "custom": [_public_provider(p) for p in providers.get("custom", [])],
+    }
 
 
 @router.post("")
@@ -74,6 +78,8 @@ async def update_provider(provider_id: str, request: Request):
         data = json.loads(row[0])
         for k in ["name", "base_url", "api_key", "models", "api_type"]:
             if k in body:
+                if k == "api_key" and _is_blank_or_masked_key(body[k]):
+                    continue
                 data[k] = body[k]
         await db.execute(
             "UPDATE custom_providers SET data_json=? WHERE id=?",
@@ -104,6 +110,8 @@ async def fetch_provider_models(provider_id: str, request: Request):
     body = await request.json()
     base_url = (body.get("base_url") or "").rstrip("/")
     api_key = body.get("api_key") or ""
+    if _is_blank_or_masked_key(api_key):
+        api_key = ""
     if not base_url or not api_key:
         async with db_conn() as db:
             row = await (await db.execute(
@@ -158,3 +166,26 @@ async def list_models(provider_id: str):
     if not models:
         models = provider.get("models", [])
     return {"models": models}
+
+
+def _public_provider(provider: dict) -> dict:
+    data = dict(provider)
+    raw_key = str(data.get("api_key") or "")
+    data["api_key"] = _mask_api_key(raw_key)
+    data["api_key_masked"] = bool(raw_key)
+    return data
+
+
+def _mask_api_key(key: str) -> str:
+    key = (key or "").strip()
+    if not key:
+        return ""
+    if len(key) <= 4:
+        return "***" + key[-1:]
+    prefix = key[:3] if len(key) > 8 else ""
+    return f"{prefix}***{key[-4:]}"
+
+
+def _is_blank_or_masked_key(value) -> bool:
+    raw = str(value or "").strip()
+    return not raw or "***" in raw

@@ -82,8 +82,8 @@ async def get_memory():
 
 @router.post("/memory/sync")
 async def sync_memory(request: Request):
-    """Trigger memory agent manually."""
-    from app.services.memory_agent import run_memory_agent
+    """Trigger Chaoxing memory reconciliation manually."""
+    from app.chaoxing.memory_provider import run_chaoxing_memory_sync
     from app.services.provider_registry import resolve_provider
     from app.config import settings
 
@@ -96,13 +96,13 @@ async def sync_memory(request: Request):
     )
     model = settings.standby_agent_model or "gpt-4o-mini"
     try:
-        result = await run_memory_agent(
+        result = await run_chaoxing_memory_sync(
             chaoxing_svc, settings.database_path,
             provider, model, api_key,
         )
         return result
     except Exception as e:
-        return {"error": str(e), "candidate_count": 0, "kept_count": 0}
+        return {"error": str(e), "candidate_count": 0, "processed_count": 0}
 
 
 @router.post("/memory/{memory_id}/archive")

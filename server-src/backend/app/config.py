@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     vapid_private_key: str = ""
     vapid_public_key: str = ""
     vapid_mailto: str = "mailto:admin@example.com"
+    access_token: str = ""
 
     database_path: str = "/data/chatbot.db"
     chaoxing_sync_interval: int = 300

@@ -33,6 +33,7 @@ async def run_schedule_agent(
     chaoxing_svc,
     db_path: str,
     thinking_budget: int = 0,
+    conversation_id: str = "default",
 ) -> AsyncGenerator[dict, None]:
     from .agent_service import AgentMsg, ToolDefinition, run_agentic_loop
 
@@ -79,11 +80,14 @@ async def run_schedule_agent(
         "create_calendar_event", "update_calendar_event", "delete_calendar_event",
         "schedule_notification", "cancel_scheduled_notification",
         "send_push_notification", "set_push_config", "trigger_memory_scan",
-        "import_timetable",
+        "import_timetable", "db_execute",
     }
 
     async def execute_tool(tc):
-        result = await _execute_schedule_tool(tc, chaoxing_svc, db_path, user_message, provider, model, api_key)
+        result = await _execute_schedule_tool(
+            tc, chaoxing_svc, db_path, user_message, provider, model, api_key,
+            conversation_id=conversation_id,
+        )
         # Collect structured data from read tools
         target = _TOOL_PAYLOAD_MAP.get(tc.name)
         if target:
@@ -106,6 +110,7 @@ async def run_schedule_agent(
                     parsed = json.loads(result)
                 except (json.JSONDecodeError, TypeError):
                     parsed = {"result": result}
+                await _audit_schedule_tool(db_path, conversation_id, tc.name, tc.arguments, result)
                 payload_collector["actions"].append({
                     "tool": tc.name,
                     "arguments": tc.arguments,
@@ -122,7 +127,7 @@ async def run_schedule_agent(
     # If pending mutations were queued this turn, tell the frontend to show the
     # confirm button. (Pending is now a LIST; the old code called .get() on it
     # and threw, silently swallowing the event — which is why no button showed.)
-    pending_items = await get_pending_mutations(db_path)
+    pending_items = await get_pending_mutations(db_path, conversation_id)
     if pending_items and not is_confirmation_text(user_message):
         tools = [it.get("tool", "") for it in pending_items if isinstance(it, dict)]
         yield {
@@ -314,13 +319,13 @@ async def collect_reports(plan, db_path, chaoxing_svc, now, window_hours=48) -> 
 
 
 def _filter_schedule_tools(tools: list, user_message: str) -> list:
-    """Filter schedule tools by relevance to cut LLM input tokens.
+    """Return the full tool set.
 
-    Routing keywords + synonym expansion + scoring live in intent.py.
+    The redesign gives the schedule agent a broad, auditable tool surface. The
+    earlier keyword pre-screen is intentionally disabled so multi-turn replies
+    and unusual phrasing cannot silently remove the exact tool the model needs.
     """
-    from .intent import filter_tool_names
-    keep = set(filter_tool_names(user_message, [t.name for t in tools]))
-    return [t for t in tools if t.name in keep]
+    return tools
 
 
 def _build_schedule_tools() -> list:
@@ -447,6 +452,57 @@ def _build_schedule_tools() -> list:
                     "id": {"type": "string", "description": "watch entity id"},
                     "name": {"type": "string", "description": "不知道 id 时可按名称删除"},
                 },
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
+            name="kb_search",
+            description="检索新知识库中的 entities、facts 和活跃事项。用户问知识、课程实体、关注项、历史事实或事项时调用。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索词"},
+                    "limit": {"type": "integer", "description": "最多返回条数，默认 8，最大 20"},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
+            name="list_agent_audit",
+            description="查看最近 Agent 实际执行过的写操作审计记录。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "最多返回条数，默认 10，最大 50"}
+                },
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
+            name="db_query",
+            description="只读查询本地 SQLite 数据库。仅允许 SELECT/PRAGMA，结果会限制条数。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string", "description": "SELECT 或 PRAGMA 查询"},
+                    "limit": {"type": "integer", "description": "最多返回行数，默认 20，最大 100"},
+                },
+                "required": ["sql"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
+            name="db_execute",
+            description="执行受限数据库写操作。只在用户明确要求底层修正数据时使用，必须先进入确认队列并写审计。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string", "description": "单条 INSERT/UPDATE/DELETE SQL"},
+                    "params": {"type": "array", "items": {"type": "string"}, "description": "参数数组"},
+                    "reason": {"type": "string", "description": "为什么要执行这条写操作"},
+                },
+                "required": ["sql", "reason"],
                 "additionalProperties": False,
             },
         ),
@@ -773,6 +829,7 @@ async def _execute_schedule_tool(
     provider: dict = None,
     model: str | None = None,
     api_key: str | None = None,
+    conversation_id: str = "default",
 ) -> str:
     if tc.name == "get_schedule_context":
         return await _get_schedule_context(chaoxing_svc, db_path)
@@ -782,15 +839,10 @@ async def _execute_schedule_tool(
     elif tc.name in ("refresh_message_memory", "refresh_chaoxing_memory"):
         if not provider or not model or not api_key:
             return "错误: 缺少模型配置，无法刷新学习通 memory。"
-        from .memory_agent import run_memory_agent
-        scope = tc.arguments.get("scope") or "changed"
-        if scope not in ("changed", "all", "conversation"):
-            scope = "changed"
-        conv_id = tc.arguments.get("conversation_id")
-        conversation_ids = [conv_id] if (scope == "conversation" and conv_id) else None
-        result = await run_memory_agent(
+        from app.chaoxing.memory_provider import run_chaoxing_memory_sync
+
+        result = await run_chaoxing_memory_sync(
             chaoxing_svc, db_path, provider, model, api_key,
-            scope=scope, conversation_ids=conversation_ids,
         )
         return json.dumps(result, ensure_ascii=False)
     elif tc.name in ("get_chaoxing_assignments", "read_chaoxing_assignments"):
@@ -875,7 +927,7 @@ async def _execute_schedule_tool(
     elif tc.name == "create_watch":
         confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
         if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
             return confirmation
         from app.services.knowledge import upsert_entity
 
@@ -904,7 +956,7 @@ async def _execute_schedule_tool(
     elif tc.name == "delete_watch":
         confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
         if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
             return confirmation
         import datetime as _dt
         from app.services.knowledge import sync_entity_fts
@@ -938,6 +990,45 @@ async def _execute_schedule_tool(
                 await sync_entity_fts(db, affected_id)
             await db.commit()
         return json.dumps({"ok": cur.rowcount > 0}, ensure_ascii=False)
+    elif tc.name == "kb_search":
+        query = (tc.arguments.get("query") or "").strip()
+        limit = max(1, min(int(tc.arguments.get("limit") or 8), 20))
+        if not query:
+            return "错误: 缺少 query。"
+        return await _kb_search(db_path, query, limit)
+    elif tc.name == "list_agent_audit":
+        limit = max(1, min(int(tc.arguments.get("limit") or 10), 50))
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (await db.execute(
+                """SELECT id, conversation_id, tool_name, sql_or_op, result_summary, created_at
+                   FROM agent_audit_log
+                   ORDER BY created_at DESC LIMIT ?""",
+                (limit,),
+            )).fetchall()
+        return json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2)
+    elif tc.name == "db_query":
+        sql = (tc.arguments.get("sql") or "").strip()
+        limit = max(1, min(int(tc.arguments.get("limit") or 20), 100))
+        ok, reason = _validate_read_sql(sql)
+        if not ok:
+            return f"错误: {reason}"
+        return await _db_query(db_path, sql, limit)
+    elif tc.name == "db_execute":
+        confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
+        if confirmation:
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
+            return confirmation
+        sql = (tc.arguments.get("sql") or "").strip()
+        params = tc.arguments.get("params") or []
+        ok, reason = _validate_write_sql(sql)
+        if not ok:
+            return f"错误: {reason}"
+        async with aiosqlite.connect(db_path) as db:
+            cur = await db.execute(sql, tuple(params))
+            await db.commit()
+        result = json.dumps({"ok": True, "rows_affected": cur.rowcount}, ensure_ascii=False)
+        return result
     elif tc.name == "list_reminders":
         from .schedule_store import list_reminders
         reminders = await list_reminders(db_path, include_completed=bool(tc.arguments.get("include_completed", False)))
@@ -945,7 +1036,7 @@ async def _execute_schedule_tool(
     elif tc.name == "create_reminder":
         confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
         if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
             return confirmation
         from .schedule_store import create_reminder
         reminder = await create_reminder(
@@ -959,7 +1050,7 @@ async def _execute_schedule_tool(
     elif tc.name == "update_reminder":
         confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
         if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
             return confirmation
         from .schedule_store import update_reminder
         updates = {k: v for k, v in tc.arguments.items() if k != "id"}
@@ -968,7 +1059,7 @@ async def _execute_schedule_tool(
     elif tc.name == "complete_reminder":
         confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
         if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
             return confirmation
         from .schedule_store import update_reminder
         reminder = await update_reminder(db_path, tc.arguments.get("id", ""), isCompleted=True)
@@ -976,7 +1067,7 @@ async def _execute_schedule_tool(
     elif tc.name == "delete_reminder":
         confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
         if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
             return confirmation
         from .schedule_store import delete_reminder
         return json.dumps({"ok": await delete_reminder(db_path, tc.arguments.get("id", ""))}, ensure_ascii=False)
@@ -987,7 +1078,7 @@ async def _execute_schedule_tool(
     elif tc.name == "import_timetable":
         confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
         if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
             return confirmation
         from .schedule_store import import_timetable
         result = await import_timetable(
@@ -1006,7 +1097,7 @@ async def _execute_schedule_tool(
     elif tc.name == "create_calendar_event":
         confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
         if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
             return confirmation
         from .schedule_store import create_event
         start = tc.arguments.get("startDate")
@@ -1027,7 +1118,7 @@ async def _execute_schedule_tool(
     elif tc.name == "update_calendar_event":
         confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
         if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
             return confirmation
         from .schedule_store import update_event
         updates = {k: v for k, v in tc.arguments.items() if k != "id"}
@@ -1036,7 +1127,7 @@ async def _execute_schedule_tool(
     elif tc.name == "delete_calendar_event":
         confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
         if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments)
+            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
             return confirmation
         from .schedule_store import delete_event
         return json.dumps({"ok": await delete_event(db_path, tc.arguments.get("id", ""))}, ensure_ascii=False)
@@ -1196,12 +1287,12 @@ async def _execute_schedule_tool(
         if not provider or not model or not api_key:
             return "错误: 缺少模型配置，无法触发学习通扫描。"
         import asyncio as _asyncio
-        from .memory_agent import run_memory_agent
+        from app.chaoxing.memory_provider import run_chaoxing_memory_sync
 
         async def _bg_scan():
             try:
-                await run_memory_agent(
-                    chaoxing_svc, db_path, provider, model, api_key, scope="changed",
+                await run_chaoxing_memory_sync(
+                    chaoxing_svc, db_path, provider, model, api_key,
                 )
             except Exception as e:
                 print(f"[trigger_memory_scan] background scan failed: {e}", flush=True)
@@ -1302,6 +1393,7 @@ _NEEDS_CONFIRMATION = {
     "delete_calendar_event",
     "import_timetable",      # wipes + replaces the whole timetable
     "schedule_notification",
+    "db_execute",
 }
 
 
@@ -1341,23 +1433,30 @@ def is_confirmation_text(user_message: str) -> bool:
     return compact in short
 
 
-async def _store_pending_mutation(db_path: str, tool_name: str, arguments: dict) -> None:
+def _pending_key(conversation_id: str = "default") -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_.:-]", "_", conversation_id or "default")[:120]
+    return f"schedule_pending_mutation:{safe}"
+
+
+async def _store_pending_mutation(db_path: str, tool_name: str, arguments: dict, conversation_id: str = "default") -> None:
     """Append a mutation to the pending queue (a LIST).
 
     Stored as a list so a single "create 3 reminders" turn produces 3 pending
     items that one tap of 确认 executes together — the old single-slot store made
     each new mutation clobber the previous one, so batches were impossible.
     """
-    items = await get_pending_mutations(db_path)
+    items = await get_pending_mutations(db_path, conversation_id)
     items.append({"tool": tool_name, "arguments": arguments})
     await _set_setting(
-        db_path, "schedule_pending_mutation",
+        db_path, _pending_key(conversation_id),
         json.dumps(items, ensure_ascii=False),
     )
 
 
-async def get_pending_mutations(db_path: str) -> list[dict]:
-    raw = await _get_setting(db_path, "schedule_pending_mutation")
+async def get_pending_mutations(db_path: str, conversation_id: str = "default") -> list[dict]:
+    raw = await _get_setting(db_path, _pending_key(conversation_id))
+    if not raw and conversation_id == "default":
+        raw = await _get_setting(db_path, "schedule_pending_mutation")
     if not raw:
         return []
     try:
@@ -1369,14 +1468,16 @@ async def get_pending_mutations(db_path: str) -> list[dict]:
     return parsed if isinstance(parsed, list) else []
 
 
-async def clear_pending_mutations(db_path: str) -> None:
-    await _set_setting(db_path, "schedule_pending_mutation", None)
+async def clear_pending_mutations(db_path: str, conversation_id: str = "default") -> None:
+    await _set_setting(db_path, _pending_key(conversation_id), None)
+    if conversation_id == "default":
+        await _set_setting(db_path, "schedule_pending_mutation", None)
 
 
-async def execute_pending_mutations(chaoxing_svc, db_path: str) -> dict:
+async def execute_pending_mutations(chaoxing_svc, db_path: str, conversation_id: str = "default") -> dict:
     """Run ALL queued pending mutations. Used by the confirm BUTTON (no text
     gate) and by the typed-confirmation path. Returns {ok, result}."""
-    items = await get_pending_mutations(db_path)
+    items = await get_pending_mutations(db_path, conversation_id)
     if not items:
         return {"ok": False, "result": "没有待确认的操作。"}
 
@@ -1390,7 +1491,10 @@ async def execute_pending_mutations(chaoxing_svc, db_path: str) -> dict:
         try:
             # user_message="确认执行" satisfies is_confirmation_text so the tool's
             # own _require_confirmation gate passes and it actually runs.
-            result = await _execute_schedule_tool(tc, chaoxing_svc, db_path, "确认执行", None)
+            result = await _execute_schedule_tool(
+                tc, chaoxing_svc, db_path, "确认执行", None,
+                conversation_id=conversation_id,
+            )
         except Exception as e:
             texts.append(f"执行「{tc.name}」失败：{e}")
             continue
@@ -1398,21 +1502,146 @@ async def execute_pending_mutations(chaoxing_svc, db_path: str) -> dict:
             texts.append(result)
         else:
             ok_any = True
+            await _audit_schedule_tool(db_path, conversation_id, tc.name, tc.arguments, result)
             texts.append(_confirmed_result_text(tc.name, result))
 
-    await clear_pending_mutations(db_path)
+    await clear_pending_mutations(db_path, conversation_id)
     return {"ok": ok_any, "result": "\n".join(texts) or "已完成。"}
 
 
-async def execute_confirmed_pending_mutation(user_message: str, chaoxing_svc, db_path: str) -> dict | None:
+async def execute_confirmed_pending_mutation(user_message: str, chaoxing_svc, db_path: str, conversation_id: str = "default") -> dict | None:
     """Typed-confirmation path (user types "确认"). Button path uses
     execute_pending_mutations directly via the /confirm endpoint."""
     if not is_confirmation_text(user_message):
         return None
-    if not await get_pending_mutations(db_path):
+    if not await get_pending_mutations(db_path, conversation_id):
         return None
-    res = await execute_pending_mutations(chaoxing_svc, db_path)
+    res = await execute_pending_mutations(chaoxing_svc, db_path, conversation_id)
     return {"text": res["result"], "result": res["result"]}
+
+
+async def _audit_schedule_tool(db_path: str, conversation_id: str, tool_name: str, arguments: dict, result: str) -> None:
+    import uuid
+
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """INSERT INTO agent_audit_log
+               (id, conversation_id, tool_name, sql_or_op, result_summary, created_at)
+               VALUES (?,?,?,?,?,?)""",
+            (
+                f"audit_{uuid.uuid4().hex[:12]}",
+                conversation_id or "default",
+                tool_name,
+                json.dumps(arguments or {}, ensure_ascii=False)[:2000],
+                str(result or "")[:500],
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        await db.commit()
+
+
+async def _kb_search(db_path: str, query: str, limit: int) -> str:
+    like = f"%{query}%"
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        try:
+            rows = await (await db.execute(
+                """SELECT f.doc_id, f.doc_type, snippet(kb_fts, 2, '[', ']', '...', 8) AS snippet
+                   FROM kb_fts f
+                   WHERE kb_fts MATCH ?
+                   LIMIT ?""",
+                (_fts_query_for_sql(query), limit),
+            )).fetchall()
+        except Exception:
+            rows = []
+        entities = await (await db.execute(
+            """SELECT id, etype, name, notes, attrs
+               FROM entities
+               WHERE status='active' AND (name LIKE ? OR aliases LIKE ? OR notes LIKE ?)
+               ORDER BY updated_at DESC LIMIT ?""",
+            (like, like, like, limit),
+        )).fetchall()
+        facts = await (await db.execute(
+            """SELECT id, entity_id, text, source, confidence
+               FROM facts
+               WHERE archived_at IS NULL AND text LIKE ?
+               ORDER BY updated_at DESC LIMIT ?""",
+            (like, limit),
+        )).fetchall()
+        items = await (await db.execute(
+            """SELECT id, title, summary, action_hint, importance, kind, expires_at
+               FROM chaoxing_memory_entries
+               WHERE archived_at IS NULL
+                 AND COALESCE(status, 'active')='active'
+                 AND (title LIKE ? OR summary LIKE ? OR action_hint LIKE ?)
+               ORDER BY updated_at DESC LIMIT ?""",
+            (like, like, like, limit),
+        )).fetchall()
+    return json.dumps({
+        "fts": [dict(r) for r in rows],
+        "entities": [dict(r) for r in entities],
+        "facts": [dict(r) for r in facts],
+        "items": [dict(r) for r in items],
+    }, ensure_ascii=False, indent=2)
+
+
+async def _db_query(db_path: str, sql: str, limit: int) -> str:
+    limited_sql = sql.rstrip().rstrip(";")
+    if re.match(r"^\s*select\b", limited_sql, re.I) and not re.search(r"\blimit\b", limited_sql, re.I):
+        limited_sql = f"{limited_sql} LIMIT {limit}"
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(limited_sql)).fetchmany(limit)
+    return json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2)
+
+
+def _validate_read_sql(sql: str) -> tuple[bool, str]:
+    clean = sql.strip()
+    if not clean:
+        return False, "SQL 为空"
+    if _has_multiple_statements(clean):
+        return False, "只允许单条 SQL"
+    if not re.match(r"^(select|pragma)\b", clean, re.I):
+        return False, "只允许 SELECT/PRAGMA"
+    if re.search(r"\b(insert|update|delete|drop|alter|attach|detach|replace|create|vacuum)\b", clean, re.I):
+        return False, "只读查询不能包含写操作"
+    return True, ""
+
+
+def _validate_write_sql(sql: str) -> tuple[bool, str]:
+    clean = sql.strip()
+    if not clean:
+        return False, "SQL 为空"
+    if _has_multiple_statements(clean):
+        return False, "只允许单条 SQL"
+    if not re.match(r"^(insert|update|delete)\b", clean, re.I):
+        return False, "只允许 INSERT/UPDATE/DELETE"
+    if re.search(r"\b(drop|alter|attach|detach|create|vacuum|pragma|reindex)\b", clean, re.I):
+        return False, "不允许结构变更或附加数据库"
+    allowed = (
+        "server_reminders", "server_events", "server_courses",
+        "scheduled_notifications", "chaoxing_memory_entries",
+        "entities", "facts", "settings", "user_memory",
+    )
+    if not any(re.search(rf"\b{re.escape(table)}\b", clean, re.I) for table in allowed):
+        return False, "写操作只能作用于允许的业务表"
+    return True, ""
+
+
+def _has_multiple_statements(sql: str) -> bool:
+    stripped = sql.strip()
+    if ";" not in stripped:
+        return False
+    return stripped.rstrip(";").count(";") > 0
+
+
+def _fts_query_for_sql(text: str) -> str:
+    words = []
+    for token in (text or "").replace('"', " ").split():
+        token = token.strip("，。！？、,.!?;:()[]{}<>")
+        if len(token) >= 2:
+            words.append(token[:20])
+    return " OR ".join(words[:8]) or text
 
 
 async def detect_and_store_pending_mutation(user_message: str, db_path: str) -> str | None:
@@ -1585,6 +1814,7 @@ def _confirmed_result_text(tool_name: str, result: str) -> str:
         "update_calendar_event": "已更新日历事件。",
         "delete_calendar_event": "已删除日历事件。",
         "import_timetable": "已导入课程表。",
+        "db_execute": "已执行数据库修正。",
     }.get(tool_name, "已执行操作。")
     return f"{action}\n{result}"
 
@@ -1615,9 +1845,20 @@ def _default_end_date(start_date: str) -> str:
         return start_date
 
 
-async def _get_schedule_context(chaoxing_svc, db_path: str) -> str:
-    from .memory_agent import is_semantically_expired
+def _memory_item_active(item: dict, now: datetime) -> bool:
+    expires_at = item.get("expires_at")
+    if not expires_at:
+        return True
+    try:
+        expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return expires >= now.astimezone(timezone.utc)
 
+
+async def _get_schedule_context(chaoxing_svc, db_path: str) -> str:
     now = datetime.now(zoneinfo.ZoneInfo("Asia/Shanghai"))
     parts = [f"当前时间: {now.strftime('%Y-%m-%d %H:%M')} ({now.strftime('%A')})"]
 
@@ -1663,7 +1904,7 @@ async def _get_schedule_context(chaoxing_svc, db_path: str) -> str:
         parts.append("\n## 重要消息记忆:")
         for r in rows:
             item = {"title": r[0], "summary": r[1], "action_hint": r[3], "expires_at": r[4]}
-            if not is_semantically_expired(item, datetime.now(timezone.utc)):
+            if _memory_item_active(item, datetime.now(timezone.utc)):
                 parts.append(f"- [{r[2]}] {r[0]}: {r[1]}")
                 if r[3]:
                     parts.append(f"  行动: {r[3]}")
@@ -1673,7 +1914,6 @@ async def _get_schedule_context(chaoxing_svc, db_path: str) -> str:
 
 async def _get_chaoxing_memory(db_path: str, importance_filter: str) -> str:
     import aiosqlite
-    from .memory_agent import is_semantically_expired
 
     conditions = ["archived_at IS NULL"]
     if importance_filter == "high":
@@ -1702,7 +1942,7 @@ async def _get_chaoxing_memory(db_path: str, importance_filter: str) -> str:
     parts = []
     for r in rows:
         item = {"title": r[1], "summary": r[2], "action_hint": r[4], "expires_at": r[6]}
-        if is_semantically_expired(item, now):
+        if not _memory_item_active(item, now):
             continue
         parts.append(f"[{r[3]}] id={r[0]} {r[1]}: {r[2]}")
         if r[4]:

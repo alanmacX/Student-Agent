@@ -23,6 +23,7 @@ def init_scheduler(app_state):
     )
     from app.tasks.memory_sweep import run_memory_sweep
     from app.tasks.ladder_audit import run_ladder_audit
+    from app.tasks.distill import run_distill
     from app.dingtalk.task import run_dingtalk_sync
     from app.dingtalk.task import run_dingtalk_memory_task
     from app.tasks.health_monitor import run_health_check
@@ -73,6 +74,22 @@ def init_scheduler(app_state):
         args=[app_state],
         id="ladder_audit",
         misfire_grace_time=300,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_distill,
+        DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=20)),
+        args=[app_state],
+        id="distill_bootstrap",
+        misfire_grace_time=120,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_distill,
+        CronTrigger(hour=2, minute=30),
+        args=[app_state],
+        id="distill",
+        misfire_grace_time=600,
         replace_existing=True,
     )
     scheduler.add_job(

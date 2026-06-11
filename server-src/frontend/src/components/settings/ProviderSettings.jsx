@@ -36,6 +36,8 @@ export default function ProviderSettings() {
   const [saving, setSaving] = useState(false);
   const [reachability, setReachability] = useState({});
   const [scheduleProviderId, setScheduleProviderId] = useState("xiaomimimo");
+  const [filterProviderId, setFilterProviderId] = useState("xiaomimimo");
+  const [filterModel, setFilterModel] = useState("");
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -51,12 +53,14 @@ export default function ProviderSettings() {
     reload();
     apiFetch("/api/settings").then((s) => {
       setScheduleProviderId(s.schedule_agent_provider_id || "xiaomimimo");
+      setFilterProviderId(s.filter_provider || s.schedule_agent_provider_id || "xiaomimimo");
+      setFilterModel(s.filter_model || "");
     }).catch(() => {});
   }, [reload]);
 
   const startEdit = (provider) => {
     setEditingId(provider.id);
-    setForm({ ...provider, _exists: true });
+    setForm({ ...provider, api_key: "", api_key_placeholder: provider.api_key || "", _exists: true });
   };
 
   const startAdd = () => {
@@ -116,6 +120,21 @@ export default function ProviderSettings() {
     await apiFetch("/api/settings", {
       method: "PUT",
       body: JSON.stringify({ settings: { schedule_agent_provider_id: id } }),
+    });
+  };
+
+  const saveFilterProvider = async (id) => {
+    setFilterProviderId(id);
+    await apiFetch("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ settings: { filter_provider: id } }),
+    });
+  };
+
+  const saveFilterModel = async () => {
+    await apiFetch("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ settings: { filter_model: filterModel.trim() } }),
     });
   };
 
@@ -228,6 +247,34 @@ export default function ProviderSettings() {
           日程 Agent 使用这个 Provider 处理对话。
         </p>
       </div>
+
+      <div className="ui-card p-5 space-y-3">
+        <p className="text-sm font-semibold text-white">Filter Provider</p>
+        <select
+          value={filterProviderId}
+          onChange={(e) => saveFilterProvider(e.target.value)}
+          className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none"
+        >
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        <div className="flex gap-2">
+          <input
+            value={filterModel}
+            onChange={(e) => setFilterModel(e.target.value)}
+            onBlur={saveFilterModel}
+            placeholder="留空则用 provider 默认模型"
+            className="min-h-10 min-w-0 flex-1 rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white placeholder-[var(--text-tertiary)] focus:outline-none"
+          />
+          <button
+            onClick={saveFilterModel}
+            className="rounded-2xl border border-[var(--border)] px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--hover-bg)]"
+          >
+            保存
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -265,7 +312,7 @@ function ProviderForm({ form, setForm, onFetchModels, fetchingModels, onSave, on
           type="password"
           value={form.api_key}
           onChange={f("api_key")}
-          placeholder="sk-..."
+          placeholder={form.api_key_placeholder ? `留空保留 ${form.api_key_placeholder}` : "sk-..."}
           className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white placeholder-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"
         />
       </label>
@@ -277,7 +324,7 @@ function ProviderForm({ form, setForm, onFetchModels, fetchingModels, onSave, on
           </span>
           <button
             onClick={onFetchModels}
-            disabled={fetchingModels || !form.base_url || !form.api_key}
+            disabled={fetchingModels || !form.base_url || (!form.api_key && !form._exists)}
             className="flex items-center gap-1 rounded-xl border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] disabled:opacity-40"
           >
             <RefreshCw size={11} className={fetchingModels ? "animate-spin" : ""} />

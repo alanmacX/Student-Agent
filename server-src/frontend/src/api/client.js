@@ -1,11 +1,49 @@
 const BASE_URL = "";
+const TOKEN_KEY = "access_token";
+
+export function getAccessToken() {
+  return localStorage.getItem(TOKEN_KEY) || "";
+}
+
+export function setAccessToken(token) {
+  const clean = (token || "").trim();
+  if (clean) localStorage.setItem(TOKEN_KEY, clean);
+  else localStorage.removeItem(TOKEN_KEY);
+  broadcastAccessToken();
+}
+
+export function clearAccessToken() {
+  localStorage.removeItem(TOKEN_KEY);
+  broadcastAccessToken();
+}
+
+export function broadcastAccessToken() {
+  const token = getAccessToken();
+  navigator.serviceWorker?.controller?.postMessage?.({ type: "access_token", token });
+}
+
+function authHeaders(headers = {}) {
+  const token = getAccessToken();
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...headers,
+  };
+}
+
+async function handleUnauthorized(resp) {
+  if (resp.status === 401) {
+    window.dispatchEvent(new CustomEvent("access-token-required"));
+  }
+}
 
 export async function apiFetch(path, options = {}) {
   const resp = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json", ...options.headers },
+    headers: authHeaders(options.headers),
     ...options,
   });
   if (!resp.ok) {
+    await handleUnauthorized(resp);
     throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
   }
   return resp.json();
@@ -18,12 +56,15 @@ export function apiStream(path, body, callbacks) {
     try {
       const resp = await fetch(`${BASE_URL}${path}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify(body),
         signal: controller.signal,
       });
 
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      if (!resp.ok) {
+        await handleUnauthorized(resp);
+        throw new Error(`HTTP ${resp.status}`);
+      }
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();

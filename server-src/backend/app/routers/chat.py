@@ -5,7 +5,10 @@ from fastapi.responses import StreamingResponse
 import json
 import asyncio
 import uuid
+import ipaddress
+import socket
 from datetime import datetime
+from urllib.parse import urljoin, urlparse
 from app.database import db_conn
 from app.services.api_service import make_service
 from app.services.agent_service import AgentMsg, ToolDefinition, run_agentic_loop, filter_relevant_tools
@@ -78,7 +81,6 @@ CHAT_TOOLS = [
 async def _execute_chat_tool(tc, db_path: str) -> str:
     """Execute a chat tool call."""
     from app.services.api_service import get_http_client
-    import re
 
     client = get_http_client()
 
@@ -86,11 +88,21 @@ async def _execute_chat_tool(tc, db_path: str) -> str:
         url = tc.arguments.get("url", "")
         if not url:
             return "错误: 缺少 URL"
-        # Block private IPs
-        if re.search(r'(localhost|127\.0\.0\.1|0\.0\.0\.1|10\.\d|192\.168|172\.(1[6-9]|2\d|3[01]))', url):
-            return "错误: 不允许访问私有网络地址"
         try:
-            resp = await client.get(url, follow_redirects=True, timeout=15.0)
+            current_url = url
+            for _ in range(5):
+                allowed, reason = await _validate_public_http_url(current_url)
+                if not allowed:
+                    return f"错误: {reason}"
+                resp = await client.get(current_url, follow_redirects=False, timeout=15.0)
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                location = resp.headers.get("location")
+                if not location:
+                    break
+                current_url = urljoin(current_url, location)
+            else:
+                return "错误: 重定向次数过多"
             text = resp.text[:8000]  # Match agent pipeline truncation limit
             return text
         except Exception as e:
@@ -143,6 +155,37 @@ async def _execute_chat_tool(tc, db_path: str) -> str:
         return f"推送已发送到 {attempted} 台设备：{title}"
 
     return f"错误: 未知工具 {tc.name}"
+
+
+async def _validate_public_http_url(url: str) -> tuple[bool, str]:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return False, "只允许 http/https URL"
+    if not parsed.hostname:
+        return False, "URL 缺少 host"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if port not in (80, 443):
+        return False, "只允许访问 80/443 端口"
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, parsed.hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False, "无法解析 URL host"
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if _is_blocked_ip(ip):
+            return False, "不允许访问私有、回环或链路本地地址"
+    return True, ""
+
+
+def _is_blocked_ip(ip: ipaddress._BaseAddress) -> bool:
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
 
 
 @router.post("/{conv_id}/chat")

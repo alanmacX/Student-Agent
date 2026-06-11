@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.services.api_service import init_http_client, close_http_client
 from app.services.chaoxing_service import ChaoxingService
@@ -43,6 +44,29 @@ app.add_middleware(
 )
 
 
+PUBLIC_API_PATHS = {
+    "/api/push/vapid-public-key",
+    "/api/push/received",
+    "/api/push/clicked",
+    "/api/push/dismissed",
+    "/api/notifications/feedback",
+}
+
+
+@app.middleware("http")
+async def access_token_middleware(request, call_next):
+    token = (settings.access_token or "").strip()
+    path = request.url.path
+    if token and path.startswith("/api/") and path not in PUBLIC_API_PATHS:
+        supplied = request.query_params.get("token") or ""
+        auth = request.headers.get("authorization") or ""
+        if auth.lower().startswith("bearer "):
+            supplied = auth[7:].strip()
+        if supplied != token:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "chaoxing_logged_in": app.state.chaoxing_svc.is_logged_in}
@@ -77,7 +101,7 @@ async def health_detail():
     return result
 
 
-from app.routers import conversations, chat, schedule, chaoxing, providers, settings as settings_router, push, reminders, data, analytics
+from app.routers import conversations, chat, schedule, chaoxing, providers, settings as settings_router, push, reminders, data, analytics, dashboard
 from app.dingtalk.router import router as dingtalk_router
 
 app.include_router(conversations.router)
@@ -92,6 +116,7 @@ app.include_router(reminders.router)
 app.include_router(data.router)
 app.include_router(dingtalk_router)
 app.include_router(analytics.router)
+app.include_router(dashboard.router)
 
 if settings.debug:
     from app.routers.debug import router as debug_router

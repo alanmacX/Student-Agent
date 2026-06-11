@@ -171,18 +171,8 @@ async def debug_scheduler():
 
 @router.post("/standby")
 async def debug_standby(request: Request):
-    """Manually trigger one standby agent run. Returns the decision and log entry."""
-    from app.tasks.standby_agent import run_standby_agent
-
-    app_state = request.app.state
-    await run_standby_agent(app_state)
-
-    # Return last log entry
-    async with db_conn() as db:
-        row = await (await db.execute(
-            "SELECT * FROM standby_agent_log ORDER BY id DESC LIMIT 1"
-        )).fetchone()
-    return dict(row) if row else {"error": "no log entry found"}
+    """Legacy standby agent has been removed by the redesign."""
+    return {"ok": False, "removed": True, "message": "standby_agent 已由 ladder_audit + Reconciler 取代"}
 
 
 @router.get("/chaoxing")

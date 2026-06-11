@@ -407,6 +407,32 @@ _COLUMN_MIGRATIONS: list[str] = [
         action TEXT NOT NULL,
         created_at TEXT NOT NULL
     )""",
+    "ALTER TABLE notification_feedback ADD COLUMN source TEXT",
+    "ALTER TABLE notification_feedback ADD COLUMN data_json TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_notification_feedback_item ON notification_feedback(item_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_notification_feedback_action ON notification_feedback(action, created_at)",
+    """CREATE TABLE IF NOT EXISTS agent_audit_log (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT,
+        tool_name TEXT,
+        sql_or_op TEXT NOT NULL,
+        result_summary TEXT,
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_agent_audit_created ON agent_audit_log(created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_agent_audit_conversation ON agent_audit_log(conversation_id, created_at DESC)",
+    """CREATE TABLE IF NOT EXISTS llm_budget_log (
+        day TEXT NOT NULL,
+        callpoint TEXT NOT NULL,
+        provider_id TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        calls INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(day, callpoint, provider_id, model)
+    )""",
+    "INSERT OR IGNORE INTO settings (key, value) VALUES ('daily_token_budget', '500000')",
 
     # ── notification delivery state ───────────────────────────────────────
     "ALTER TABLE notification_log ADD COLUMN device_received_at TEXT",

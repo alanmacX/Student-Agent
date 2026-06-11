@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, Component } from "react";
-import { Calendar, MessageSquare, Settings, Bell, Lightbulb } from "lucide-react";
+import { Calendar, MessageSquare, Settings, Bell, Lightbulb, KeyRound } from "lucide-react";
 import TabBar from "./components/layout/TabBar";
 import ScheduleOverview from "./components/schedule/ScheduleOverview";
 import ScheduleView from "./components/schedule/ScheduleView";
@@ -7,6 +7,7 @@ import SettingsView from "./components/settings/SettingsView";
 import NotificationCenter from "./components/notifications/NotificationCenter";
 import HubView from "./components/hub/HubView";
 import DailyPopup from "./components/notifications/DailyPopup";
+import { broadcastAccessToken, setAccessToken } from "./api/client";
 
 const VALID_TABS = ["overview", "agent", "hub", "notifications", "settings"];
 
@@ -93,6 +94,7 @@ function usePullToRefresh(onRefresh) {
 
 function App() {
   const [tab, setTab] = useState("overview");
+  const [tokenRequired, setTokenRequired] = useState(false);
 
   const handleRefresh = useCallback(() => {
     window.location.reload();
@@ -102,6 +104,15 @@ function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const tokenFromUrl = params.get("token");
+    if (tokenFromUrl) {
+      setAccessToken(tokenFromUrl);
+      params.delete("token");
+      const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
+      window.history.replaceState(null, "", next);
+    } else {
+      broadcastAccessToken();
+    }
     const initialTab = params.get("tab");
     if (VALID_TABS.includes(initialTab)) {
       setTab(initialTab);
@@ -135,9 +146,12 @@ function App() {
       }
     };
     navigator.serviceWorker?.addEventListener?.("message", handleMessage);
+    const handleTokenRequired = () => setTokenRequired(true);
+    window.addEventListener("access-token-required", handleTokenRequired);
     return () => {
       window.removeEventListener("hashchange", handleHashChange);
       navigator.serviceWorker?.removeEventListener?.("message", handleMessage);
+      window.removeEventListener("access-token-required", handleTokenRequired);
     };
   }, []);
 
@@ -146,76 +160,97 @@ function App() {
     window.history.replaceState(null, "", `#${nextTab}`);
   }, []);
 
-  const TABS = [
-    { id: "overview",      label: "总览", icon: Calendar },
-    { id: "agent",         label: "Agent", icon: MessageSquare },
-    { id: "hub",           label: "Hub",  icon: Lightbulb },
-    { id: "notifications", label: "通知", icon: Bell },
-    { id: "settings",      label: "设置", icon: Settings },
-  ];
-
   return (
     <div className="app-shell flex h-[100dvh] flex-col overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]">
+      <div className="pointer-events-none fixed inset-x-0 top-0 h-px bg-white/15" />
 
-      {/* ── Desktop: outer shell with padding ─────────────────────────── */}
-      <div className="hidden md:flex min-h-0 flex-1 overflow-hidden p-3">
-        {/* Rounded card that contains BOTH the header and the content */}
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-[18px] border border-white/10 bg-[var(--panel-bg)] shadow-2xl shadow-black/30">
-
-          {/* Tab bar — visionOS-style floating glass pill, centered. Lives in
-              the header row (normal flow) so it never overlaps content, but
-              shares the mobile bottom-bar's glass material + accent-active look. */}
-          <header className="flex h-[60px] shrink-0 items-center justify-center border-b border-[var(--border)] px-3">
-            <nav className="glass-tab flex items-center gap-1 rounded-full p-1.5">
-              {TABS.map(({ id, label, icon: Icon }) => {
-                const isActive = tab === id;
-                return (
-                  <button
-                    key={id}
-                    onClick={() => handleTabChange(id)}
-                    style={{ transition: "all 0.42s var(--ease-spring)" }}
-                    className={`flex items-center gap-2 rounded-full px-4 py-2 text-[13px] ${
-                      isActive
-                        ? "bg-[var(--accent)] font-semibold text-white shadow-lg shadow-[color:var(--accent-ring)] scale-[1.04]"
-                        : "font-medium text-[var(--text-tertiary)] hover:bg-[var(--hover-bg)] hover:text-white active:scale-95"
-                    }`}
-                  >
-                    <Icon size={17} strokeWidth={isActive ? 2.4 : 1.9} />
-                    <span>{label}</span>
-                  </button>
-                );
-              })}
-            </nav>
-          </header>
-
-          {/* Tab content */}
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <ErrorBoundary>
-              <div className={tab !== "overview"      ? "hidden" : "h-full"}><ScheduleOverview /></div>
-              <div className={tab !== "agent"         ? "hidden" : "h-full"}><ScheduleView /></div>
-              <div className={tab !== "hub"           ? "hidden" : "h-full"}><HubView /></div>
-              <div className={tab !== "notifications" ? "hidden" : "h-full"}><NotificationCenter /></div>
-              <div className={tab !== "settings"      ? "hidden" : "h-full"}><SettingsView /></div>
-            </ErrorBoundary>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Mobile: full-screen, no padding ───────────────────────────── */}
-      <div className="flex min-h-0 flex-1 overflow-hidden md:hidden">
-        <main className="min-w-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden md:p-3 md:pb-3">
+        {/* Main content */}
+        <main className="min-w-0 flex-1 overflow-hidden md:rounded-[18px] md:border md:border-white/10 md:bg-[var(--panel-bg)] md:shadow-2xl md:shadow-black/30">
           <ErrorBoundary>
-            <div className={tab !== "overview"      ? "hidden" : "h-full"}><ScheduleOverview /></div>
-            <div className={tab !== "agent"         ? "hidden" : "h-full"}><ScheduleView /></div>
-            <div className={tab !== "hub"           ? "hidden" : "h-full"}><HubView /></div>
+            <div className={tab !== "overview" ? "hidden" : "h-full"}><ScheduleOverview /></div>
+            <div className={tab !== "agent" ? "hidden" : "h-full"}><ScheduleView /></div>
+            <div className={tab !== "hub" ? "hidden" : "h-full"}><HubView /></div>
             <div className={tab !== "notifications" ? "hidden" : "h-full"}><NotificationCenter /></div>
-            <div className={tab !== "settings"      ? "hidden" : "h-full"}><SettingsView /></div>
+            <div className={tab !== "settings" ? "hidden" : "h-full"}><SettingsView /></div>
           </ErrorBoundary>
         </main>
       </div>
 
+      {/* Daily briefing popup on PWA open */}
       <DailyPopup />
+
+      {/* Mobile tab bar */}
       <TabBar active={tab} onChange={handleTabChange} onRefresh={handleRefresh} />
+      {tokenRequired && <AccessTokenDialog onClose={() => setTokenRequired(false)} />}
+
+      {/* Desktop tab strip - top right */}
+      <div className="absolute right-5 top-5 z-10 hidden overflow-hidden rounded-full border border-white/10 bg-black/20 p-1 shadow-lg shadow-black/20 backdrop-blur-xl md:flex">
+        {[
+          { id: "overview", label: "总览", icon: Calendar },
+          { id: "agent", label: "Agent", icon: MessageSquare },
+          { id: "hub", label: "Hub", icon: Lightbulb },
+          { id: "notifications", label: "通知", icon: Bell },
+          { id: "settings", label: "设置", icon: Settings },
+        ].map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => handleTabChange(id)}
+            className={`flex h-9 items-center gap-2 rounded-full px-3 text-xs font-medium transition ${
+              tab === id
+                ? "bg-white/14 text-white shadow-sm"
+                : "text-[var(--text-tertiary)] hover:bg-white/8 hover:text-white"
+            }`}
+            title={label}
+          >
+            <Icon size={18} />
+            {id === tab && <span>{label}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AccessTokenDialog({ onClose }) {
+  const [value, setValue] = useState("");
+  const save = () => {
+    setAccessToken(value);
+    onClose();
+    window.dispatchEvent(new Event("app-refresh"));
+  };
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 px-4 backdrop-blur-md">
+      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[var(--panel-bg)] p-5 shadow-2xl">
+        <div className="mb-4 flex items-center gap-2">
+          <KeyRound size={18} className="text-[var(--accent-soft)]" />
+          <p className="text-sm font-semibold text-white">访问令牌</p>
+        </div>
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && save()}
+          type="password"
+          autoFocus
+          placeholder="输入 ACCESS_TOKEN"
+          className="glass-input min-h-11 w-full rounded-xl px-3 text-sm"
+        />
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--hover-bg)]"
+          >
+            取消
+          </button>
+          <button
+            onClick={save}
+            disabled={!value.trim()}
+            className="rounded-xl bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+          >
+            保存
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

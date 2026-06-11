@@ -80,13 +80,20 @@ async def reconcile_message(
         return ReconcileResult()
     if not provider or not api_key:
         return ReconcileResult(ok=False, errors=["missing_provider_or_api_key"])
+    try:
+        from app.services.budget import is_budget_exhausted
+
+        if await is_budget_exhausted(db_path) and msg.get("verdict") != "notify":
+            return ReconcileResult(ok=True, warnings=["budget_exhausted_skipped_non_notify"])
+    except Exception:
+        pass
 
     ctx = await _build_context_package(db_path, msg, now)
-    raw = await _call_model(provider, model, api_key, now, ctx["text"], msg)
+    raw = await _call_model(provider, model, api_key, now, ctx["text"], msg, db_path)
     parsed = _parse_json(raw)
     if parsed.get("need_more") and parsed.get("lookup_entity"):
         extra = await _lookup_entity_context(db_path, str(parsed.get("lookup_entity")), now)
-        raw = await _call_model(provider, model, api_key, now, ctx["text"] + "\n\n补充实体:\n" + extra, msg)
+        raw = await _call_model(provider, model, api_key, now, ctx["text"] + "\n\n补充实体:\n" + extra, msg, db_path)
         parsed = _parse_json(raw)
 
     ops = parsed.get("ops") if isinstance(parsed.get("ops"), list) else []
@@ -244,7 +251,7 @@ async def _lookup_entity_context(db_path: str, name: str, now: datetime) -> str:
     return "\n".join(parts)
 
 
-async def _call_model(provider: dict, model: str, api_key: str, now: datetime, context: str, msg: dict) -> str:
+async def _call_model(provider: dict, model: str, api_key: str, now: datetime, context: str, msg: dict, db_path: str) -> str:
     from app.services.agent_service import AgentMsg, agent_complete
 
     user = f"""上下文包:
@@ -262,6 +269,13 @@ async def _call_model(provider: dict, model: str, api_key: str, now: datetime, c
         model,
         api_key,
     )
+    if response.usage:
+        try:
+            from app.services.budget import log_usage
+
+            await log_usage(db_path, "reconciler", provider.get("id", ""), model, response.usage, now)
+        except Exception:
+            pass
     return response.text or ""
 
 
@@ -327,6 +341,7 @@ async def _execute_ops(ops: list[dict], db_path: str, msg: dict, now: datetime, 
     for op in ops:
         try:
             name = op.get("op")
+            audit_summary = ""
             if name == "new_item":
                 entity_id = await _resolve_entity_for_op(db_path, op, msg, now_iso)
                 kind = _normalize_kind(op.get("kind"))
@@ -371,6 +386,7 @@ async def _execute_ops(ops: list[dict], db_path: str, msg: dict, now: datetime, 
                     await db.commit()
                 result.memory_upserted.append(eid)
                 result.effects_applied += 1
+                audit_summary = f"memory_upserted:{eid}"
 
             elif name == "update_item":
                 due = _parse_dt(op.get("due"))
@@ -395,6 +411,7 @@ async def _execute_ops(ops: list[dict], db_path: str, msg: dict, now: datetime, 
 
                 await notify_now(db_path, "事项已更新", note or "截止时间已更新", item_id=item_id, notif_type="item_update")
                 result.effects_applied += 1
+                audit_summary = f"item_updated:{item_id}"
 
             elif name == "cancel_item":
                 item_id = op["id"]
@@ -414,6 +431,7 @@ async def _execute_ops(ops: list[dict], db_path: str, msg: dict, now: datetime, 
                 await notify_now(db_path, "事项已取消", str(op.get("scope_note") or "已撤销提醒"), item_id=item_id, notif_type="item_cancel")
                 result.memory_archived.append(item_id)
                 result.effects_applied += 1
+                audit_summary = f"item_cancelled:{item_id}"
 
             elif name == "cancel_course_rows":
                 ids = op.get("ids") or []
@@ -431,6 +449,7 @@ async def _execute_ops(ops: list[dict], db_path: str, msg: dict, now: datetime, 
 
                 await notify_now(db_path, "课程取消", "相关课程行已标记取消", item_id="course-" + "-".join(ids), notif_type="course_cancel")
                 result.effects_applied += len(ids)
+                audit_summary = f"course_rows_cancelled:{len(ids)}"
 
             elif name == "new_fact":
                 async with aiosqlite.connect(db_path) as db:
@@ -445,6 +464,7 @@ async def _execute_ops(ops: list[dict], db_path: str, msg: dict, now: datetime, 
                     await db.commit()
                 result.facts_created.append(fid)
                 result.effects_applied += 1
+                audit_summary = f"fact_created:{fid}"
 
             elif name == "push_now":
                 from app.memory.dispatch import notify_now
@@ -458,6 +478,7 @@ async def _execute_ops(ops: list[dict], db_path: str, msg: dict, now: datetime, 
                 )
                 result.push_scheduled += 1
                 result.effects_applied += 1
+                audit_summary = "push_now"
 
             elif name == "conflict":
                 from app.memory.dispatch import notify_now
@@ -471,12 +492,38 @@ async def _execute_ops(ops: list[dict], db_path: str, msg: dict, now: datetime, 
                 )
                 result.push_scheduled += 1
                 result.effects_applied += 1
+                audit_summary = "conflict_push"
+            if audit_summary:
+                await _audit_op(db_path, msg, name or "unknown", op, audit_summary, now_iso)
         except Exception as e:
             logger.warning("Reconciler op failed: %s op=%s", e, op)
             result.errors.append(str(e))
 
     result.ok = not result.errors
     return result
+
+
+async def _audit_op(db_path: str, msg: dict, tool_name: str, op: dict, summary: str, now_iso: str) -> None:
+    import uuid
+
+    conversation_id = (
+        str(msg.get("conversation_id") or msg.get("cid") or msg.get("conversation_title") or msg.get("mid") or "")
+    )
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """INSERT INTO agent_audit_log
+               (id, conversation_id, tool_name, sql_or_op, result_summary, created_at)
+               VALUES (?,?,?,?,?,?)""",
+            (
+                f"audit_{uuid.uuid4().hex[:12]}",
+                conversation_id,
+                tool_name,
+                json.dumps(op, ensure_ascii=False)[:2000],
+                summary[:500],
+                now_iso,
+            ),
+        )
+        await db.commit()
 
 
 async def _resolve_entity_for_op(db_path: str, op: dict, msg: dict, now_iso: str) -> str | None:

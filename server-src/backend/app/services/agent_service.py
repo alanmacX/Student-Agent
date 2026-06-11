@@ -277,6 +277,13 @@ async def run_agentic_loop(
         if response.usage:
             provider_id = provider.get("id", "")
             usage_dict = _usage_to_dict(response.usage, model=model, provider=provider_id)
+            try:
+                from app.config import settings
+                from app.services.budget import log_usage
+
+                await log_usage(settings.database_path, "agent_loop", provider_id, model, response.usage)
+            except Exception:
+                pass
             from .api_service import estimate_cost
             cost = await estimate_cost(model, response.usage.input_tokens, response.usage.output_tokens, provider_id)
             if cost is not None:

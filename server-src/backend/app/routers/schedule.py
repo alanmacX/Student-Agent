@@ -163,9 +163,11 @@ async def _handle_slash_command(cmd: str, db_path: str, chaoxing_svc) -> tuple[s
 
     elif cmd == "/scan":
         import asyncio
+        from types import SimpleNamespace
+        from app.config import settings as app_settings
         from app.tasks.memory_sweep import run_memory_sweep
-        asyncio.create_task(run_memory_sweep(db_path))
-        return "已触发学习通扫描，结果将在约 1 分钟内更新。", None
+        asyncio.create_task(run_memory_sweep(SimpleNamespace(settings=app_settings)))
+        return "已触发 Memory 清理与对账，结果将在后台更新。", None
 
     elif cmd == "/memory":
         async with aiosqlite.connect(db_path) as db:
@@ -239,11 +241,11 @@ async def confirm_pending(request: Request):
     db_path = settings.database_path
 
     if action == "cancel":
-        await clear_pending_mutations(db_path)
+        await clear_pending_mutations(db_path, session_id)
         return {"ok": True, "result": "已取消操作。"}
 
     chaoxing_svc = request.app.state.chaoxing_svc
-    res = await execute_pending_mutations(chaoxing_svc, db_path)
+    res = await execute_pending_mutations(chaoxing_svc, db_path, session_id)
     text = res.get("result") or "已完成。"
 
     # Persist as an assistant message so it survives the post-confirm reload.
@@ -347,7 +349,7 @@ async def stream_schedule_chat(request: Request):
     chaoxing_svc = request.app.state.chaoxing_svc
 
     confirmed_pending = await execute_confirmed_pending_mutation(
-        user_message, chaoxing_svc, settings.database_path
+        user_message, chaoxing_svc, settings.database_path, session_id
     )
     if confirmed_pending:
         async def generate_confirmed():
@@ -427,6 +429,7 @@ async def stream_schedule_chat(request: Request):
             async for event in run_schedule_agent(
                 user_message, history, provider, model, api_key,
                 chaoxing_svc, settings.database_path,
+                conversation_id=session_id,
             ):
                 etype = event.get("type")
                 if etype == "text":
