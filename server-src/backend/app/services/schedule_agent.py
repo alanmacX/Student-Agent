@@ -747,7 +747,7 @@ async def _execute_schedule_tool(
         return json.dumps(current_time_payload(), ensure_ascii=False, indent=2)
     elif tc.name == "get_data_schema":
         from app.services.agent_data_tools import schema_payload
-        return json.dumps(schema_payload(), ensure_ascii=False, indent=2)
+        return json.dumps(await schema_payload(db_path), ensure_ascii=False, indent=2)
     elif tc.name == "search_database":
         from app.services.agent_data_tools import search_database
         result = await search_database(

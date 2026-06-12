@@ -55,8 +55,8 @@ class SearchResult:
         return json.dumps(self.payload, ensure_ascii=False, indent=2)
 
 
-def schema_payload() -> dict[str, Any]:
-    return {
+async def schema_payload(db_path: str | None = None) -> dict[str, Any]:
+    payload = {
         "ok": True,
         "tables": ALLOWED_TABLES,
         "time_fields": TIME_FIELD_HINTS,
@@ -78,6 +78,9 @@ def schema_payload() -> dict[str, Any]:
             "SELECT id,title,summary,importance,expires_at FROM chaoxing_memory_entries WHERE archived_at IS NULL AND title LIKE ? LIMIT 20",
         ],
     }
+    if db_path:
+        payload["columns"] = await table_columns(db_path)
+    return payload
 
 
 def current_time_payload() -> dict[str, Any]:
@@ -119,10 +122,20 @@ async def search_database(
         return SearchResult(False, {"ok": False, "error": reason})
 
     limited_sql = _with_limit(sql, limit)
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-        rows = await (await db.execute(limited_sql, tuple(params))).fetchmany(limit)
-        payload_rows = [_clean_row(dict(row), detail_level=detail_level) for row in rows]
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (await db.execute(limited_sql, tuple(params))).fetchmany(limit)
+            payload_rows = [_clean_row(dict(row), detail_level=detail_level) for row in rows]
+    except aiosqlite.Error as exc:
+        tables = sorted(_extract_tables(sql) or _extract_pragma_tables(sql))
+        return SearchResult(False, {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "provenance": {"tables": tables, "sql": _sql_preview(sql)},
+            "columns": await table_columns(db_path, set(tables)) if tables else {},
+            "hint": "先用返回的 columns 修正列名；不要猜不存在的字段。",
+        })
     return SearchResult(True, {
         "ok": True,
         "mode": detail_level,
@@ -131,6 +144,27 @@ async def search_database(
         "provenance": {"tables": sorted(_extract_tables(sql)), "sql": _sql_preview(sql)},
         "rows": payload_rows,
     })
+
+
+async def table_columns(db_path: str, tables: set[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+    target_tables = tables or set(ALLOWED_TABLES)
+    columns: dict[str, list[dict[str, Any]]] = {}
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        for table in sorted(t for t in target_tables if t in ALLOWED_TABLES):
+            rows = await (await db.execute(f'PRAGMA table_info("{table}")')).fetchall()
+            clean_cols = []
+            for row in rows:
+                name = row["name"]
+                if SENSITIVE_RE.search(name):
+                    continue
+                clean_cols.append({
+                    "name": name,
+                    "type": row["type"] or "",
+                    "pk": bool(row["pk"]),
+                })
+            columns[table] = clean_cols
+    return columns
 
 
 async def get_record_detail(db_path: str, source: str, record_id: str) -> dict[str, Any]:
