@@ -74,12 +74,22 @@ function AssignmentRow({ item }) {
 }
 
 // ── Chaoxing message row ───────────────────────────────────────────────────
+const SOURCE_BADGE = {
+  chaoxing: { label: "学习通", cls: "bg-sky-500/15 text-sky-300" },
+  dingtalk: { label: "钉钉", cls: "bg-blue-500/15 text-blue-300" },
+  user: { label: "手动", cls: "bg-zinc-500/15 text-zinc-300" },
+  user_told: { label: "手动", cls: "bg-zinc-500/15 text-zinc-300" },
+  automation: { label: "系统", cls: "bg-violet-500/15 text-violet-300" },
+};
+
 function MessageRow({ item }) {
   const isHigh = item.importance === "high";
+  const badge = SOURCE_BADGE[item.source_type] || { label: item.source_type || "消息", cls: "bg-zinc-500/15 text-zinc-300" };
   return (
     <div className="px-3 py-2">
       <div className="flex items-center gap-1.5">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isHigh ? "bg-orange-400" : "bg-emerald-400"}`} />
+        <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${badge.cls}`}>{badge.label}</span>
         <p className="text-sm font-medium text-white truncate">{item.title}</p>
       </div>
       {item.summary && (
@@ -180,7 +190,7 @@ export default function SchedulePayloadView({ payload }) {
         ))}
       </PayloadSection>
 
-      <PayloadSection icon={MessageSquare} label="学习通消息" items={messages}>
+      <PayloadSection icon={MessageSquare} label="消息记忆" items={messages}>
         {messages.map((item, i) => (
           <div key={item.id || i} className={i < messages.length - 1 ? "border-b border-[var(--border)]" : ""}>
             <MessageRow item={item} />

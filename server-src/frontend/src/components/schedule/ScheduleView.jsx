@@ -312,21 +312,13 @@ export default function ScheduleView() {
         prev.map((m) => (m._streaming ? { ...m, _streaming: false } : m))
       );
       refreshSessions();
+      // If a confirmation is pending, the in-memory message already carries the
+      // button — reloading from the DB (which has no transient pendingConfirmation)
+      // wipes it and the re-attach was racy. Skip the reload until the user
+      // confirms/cancels (handleConfirm/handleCancel reload afterwards).
+      if (pendingConfirmRef.current) return;
       if (activeSession?.id) {
-        // Await the DB reload so we know when messages are replaced, then
-        // re-attach pendingConfirmation. Without await, loadMessages races
-        // against the state already set by onPendingConfirm and wipes the button.
         await loadMessages(activeSession.id);
-        const pending = pendingConfirmRef.current;
-        if (pending) {
-          setMessages((prev) => {
-            const lastIdx = prev.findLastIndex((m) => m.role === "assistant");
-            if (lastIdx === -1) return prev;
-            const updated = [...prev];
-            updated[lastIdx] = { ...updated[lastIdx], pendingConfirmation: pending };
-            return updated;
-          });
-        }
       }
     },
     onError: (msg) => {

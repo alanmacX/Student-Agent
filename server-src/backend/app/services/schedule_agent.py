@@ -1236,7 +1236,7 @@ async def _execute_schedule_tool(
             where = "" if importance == "all" else f"AND importance='{importance}'"
             rows = await (await db.execute(f"""
                 SELECT title, summary, action_hint, importance, category,
-                       content_time, expires_at
+                       content_time, expires_at, source_type
                 FROM chaoxing_memory_entries
                 WHERE archived_at IS NULL
                 AND (expires_at IS NULL OR expires_at > datetime('now'))
@@ -1245,7 +1245,7 @@ async def _execute_schedule_tool(
                          COALESCE(content_time, updated_at, sent_at) DESC
                 LIMIT ?
             """, (limit,))).fetchall()
-        entries = [dict(zip(["title","summary","action_hint","importance","category","content_time","expires_at"], r)) for r in rows]
+        entries = [dict(zip(["title","summary","action_hint","importance","category","content_time","expires_at","source_type"], r)) for r in rows]
         if not entries:
             return json.dumps({"ok": True, "count": 0, "message": "暂无未过期的 Memory 条目。"})
         return json.dumps({"ok": True, "count": len(entries), "entries": entries}, ensure_ascii=False)
