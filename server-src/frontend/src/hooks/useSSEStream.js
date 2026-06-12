@@ -1,4 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
+import { getAccessToken } from "../api/client";
 
 export function useSSEStream({ onText, onReasoning, onUsage, onToolStart, onToolResult, onSchedulePayload, onPendingConfirmation, onDone, onError }) {
   const isStreamingRef = useRef(false);
@@ -19,14 +20,21 @@ export function useSSEStream({ onText, onReasoning, onUsage, onToolStart, onTool
     controllerRef.current = new AbortController();
 
     try {
+      const token = getAccessToken();
       const resp = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(body),
         signal: controllerRef.current.signal,
       });
 
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      if (!resp.ok) {
+        if (resp.status === 401) window.dispatchEvent(new CustomEvent("access-token-required"));
+        throw new Error(`HTTP ${resp.status}`);
+      }
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
