@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { Download, Upload, AlertTriangle } from "lucide-react";
+import { apiFetch, getAccessToken } from "../../api/client";
 
 export default function DataPanel() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
 
   const handleExport = () => {
-    window.location.href = "/api/data/export";
+    const token = getAccessToken();
+    window.location.href = `/api/data/export${token ? `?token=${encodeURIComponent(token)}` : ""}`;
   };
 
   const handleImport = async (e) => {
@@ -17,12 +19,10 @@ export default function DataPanel() {
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-      const r = await fetch("/api/data/import", {
+      const result = await apiFetch("/api/data/import", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      const result = await r.json();
       setImportResult(result);
     } catch (err) {
       setImportResult({ error: err.message });

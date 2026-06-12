@@ -161,8 +161,7 @@ export default function ScheduleView() {
   const loadMessages = useCallback(async (sessionId) => {
     if (!sessionId) return null;
     try {
-      const res = await fetch(`/api/schedule/sessions/${sessionId}/messages`);
-      const data = await res.json();
+      const data = await apiFetch(`/api/schedule/sessions/${sessionId}/messages`);
       const parsed = data.map((m) => {
         if (m.schedule_payload_json) {
           try {
@@ -475,7 +474,7 @@ export default function ScheduleView() {
 
   const handleClearSession = useCallback(async () => {
     if (!activeSession?.id) return;
-    await fetch(`/api/schedule/sessions/${activeSession.id}/messages`, { method: "DELETE" });
+    await apiFetch(`/api/schedule/sessions/${activeSession.id}/messages`, { method: "DELETE" });
     setMessages([]);
   }, [activeSession]);
 

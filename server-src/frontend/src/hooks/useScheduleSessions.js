@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "../api/client";
 
 const AUTO_NEW_SESSION_HOURS = 12;
 
@@ -8,9 +9,7 @@ export function useScheduleSessions() {
 
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch("/api/schedule/sessions");
-      if (!res.ok) throw new Error("Failed to fetch sessions");
-      const data = await res.json();
+      const data = await apiFetch("/api/schedule/sessions");
       setSessions(data);
       return data;
     } catch (e) {
@@ -27,12 +26,10 @@ export function useScheduleSessions() {
 
   const createSession = useCallback(async (title = "新对话") => {
     try {
-      const res = await fetch("/api/schedule/sessions", {
+      const session = await apiFetch("/api/schedule/sessions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
       });
-      const session = await res.json();
       setSessions((prev) => [session, ...prev]);
       return session;
     } catch (e) {
@@ -65,7 +62,7 @@ export function useScheduleSessions() {
 
   const deleteSession = useCallback(async (id) => {
     try {
-      await fetch(`/api/schedule/sessions/${id}`, { method: "DELETE" });
+      await apiFetch(`/api/schedule/sessions/${id}`, { method: "DELETE" });
       setSessions((prev) => prev.filter((s) => s.id !== id));
     } catch (e) {
       console.error("[useScheduleSessions] delete error:", e);
@@ -74,9 +71,8 @@ export function useScheduleSessions() {
 
   const renameSession = useCallback(async (id, title) => {
     try {
-      await fetch(`/api/schedule/sessions/${id}`, {
+      await apiFetch(`/api/schedule/sessions/${id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
       });
       setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
