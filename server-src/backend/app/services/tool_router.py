@@ -13,7 +13,9 @@ READ_FALLBACK = {
     "list_reminders", "list_calendar_events", "list_courses",
     "read_message_memory", "get_chaoxing_assignments", "kb_search",
 }
+HEAVY_RAW_TOOLS = {"read_dingtalk_messages", "get_chaoxing_messages"}
 WRITE_HINT_RE = re.compile(r"(提醒我|创建|新建|添加|删除|删掉|完成|改成|更新|取消|安排|推送|记住|保存|导入)", re.I)
+RAW_MESSAGE_HINT_RE = re.compile(r"(钉钉|DingTalk|群聊|私聊|聊天记录|原文|原始消息|学习通消息|消息列表)", re.I)
 
 
 async def resolve_light_agent_provider(default_provider: dict, default_model: str, default_api_key: str):
@@ -87,9 +89,10 @@ async def select_tools_for_query(
             }
         if not selected or float(parsed.get("confidence") or 0) < 0.35:
             selected = _fallback_tool_names(user_message, tools)
+        selected = _drop_heavy_raw_tools(user_message, selected)
         return selected, usage
     except Exception as exc:
-        return _fallback_tool_names(user_message, tools), {"phase": "tool_router", "error": str(exc)[:200]}
+        return _drop_heavy_raw_tools(user_message, _fallback_tool_names(user_message, tools)), {"phase": "tool_router", "error": str(exc)[:200]}
 
 
 def _fallback_tool_names(user_message: str, tools: list[ToolDefinition]) -> list[str]:
@@ -110,6 +113,12 @@ def _sanitize_tool_names(values: list[Any], available: set[str]) -> list[str]:
         if core in available and core not in out:
             out.append(core)
     return out
+
+
+def _drop_heavy_raw_tools(user_message: str, selected: list[str]) -> list[str]:
+    if RAW_MESSAGE_HINT_RE.search(user_message or ""):
+        return selected
+    return [name for name in selected if name not in HEAVY_RAW_TOOLS]
 
 
 def _parse_router_json(text: str) -> dict[str, Any]:
