@@ -34,13 +34,21 @@ const PERIODS = [
 export default function ScheduleOverview() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshingOverview, setRefreshingOverview] = useState(false);
   const [refreshingBriefing, setRefreshingBriefing] = useState(false);
   const pollRef = useRef(null);
+  const dataRef = useRef(null);
 
-  const refresh = async () => {
-    setLoading(true);
+  const refresh = async ({ soft = false } = {}) => {
+    const hasData = dataRef.current !== null;
+    if (soft || hasData) {
+      setRefreshingOverview(true);
+    } else {
+      setLoading(true);
+    }
     try {
       const d = await fetchScheduleSidebar();
+      dataRef.current = d;
       setData(d);
       // If no briefing yet, kick off generation and poll for it.
       if (!d?.briefing?.text) {
@@ -50,6 +58,7 @@ export default function ScheduleOverview() {
       console.error("Failed to load schedule overview:", e);
     } finally {
       setLoading(false);
+      setRefreshingOverview(false);
     }
   };
 
@@ -66,6 +75,7 @@ export default function ScheduleOverview() {
       try {
         const d = await fetchScheduleSidebar();
         if (d?.briefing?.text || tries > 10) {
+          dataRef.current = d;
           setData(d);
           clearInterval(pollRef.current);
           pollRef.current = null;
@@ -81,7 +91,11 @@ export default function ScheduleOverview() {
     try {
       const result = await refreshBriefing();
       if (result?.briefing) {
-        setData((prev) => prev ? { ...prev, briefing: result.briefing } : prev);
+        setData((prev) => {
+          const next = prev ? { ...prev, briefing: result.briefing } : prev;
+          dataRef.current = next;
+          return next;
+        });
       }
     } catch (e) {
       console.error("Failed to refresh briefing:", e);
@@ -93,7 +107,7 @@ export default function ScheduleOverview() {
   useEffect(() => {
     refresh();
     const handler = (event) => {
-      if (!event.detail?.tab || event.detail.tab === "overview") refresh();
+      if (!event.detail?.tab || event.detail.tab === "overview") refresh({ soft: true });
     };
     window.addEventListener("app-refresh", handler);
     return () => {
@@ -122,20 +136,20 @@ export default function ScheduleOverview() {
   return (
     <div className="h-full overflow-y-auto bg-[var(--panel-bg)]">
       {/* Header — island, width-matched to content */}
-      <div className="sticky top-0 z-10 mx-auto flex w-full max-w-7xl items-center justify-between gap-2 px-3 pt-3 pb-1 lg:px-6">
+      <div className="sticky top-0 z-10 mx-auto flex w-full max-w-[1560px] items-center justify-between gap-2 px-3 pt-3 pb-1 lg:px-6">
         <div className="glass-pill flex min-h-[48px] items-center rounded-full px-5 py-2">
           <h1 className="text-sm font-semibold text-white">日程总览</h1>
         </div>
         <button
-          onClick={refresh}
+          onClick={() => refresh({ soft: true })}
           className="glass-pill grid h-12 w-12 shrink-0 place-items-center rounded-full text-[var(--text-secondary)] transition-all duration-200 ease-[var(--ease-spring)] hover:scale-105 hover:border-[var(--glass-border-bright)] hover:text-white active:scale-90"
           aria-label="刷新"
         >
-          <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+          <RefreshCw size={16} className={loading || refreshingOverview ? "animate-spin" : ""} />
         </button>
       </div>
 
-      <div className="mx-auto grid w-full max-w-7xl grid-cols-1 gap-4 p-3 pb-40 md:pb-6 lg:grid-cols-[minmax(340px,0.9fr)_minmax(620px,1.45fr)] lg:p-6 lg:pb-10 xl:grid-cols-[minmax(380px,0.82fr)_minmax(760px,1.55fr)]">
+      <div className="mx-auto grid w-full max-w-[1560px] grid-cols-1 gap-4 p-3 pb-40 md:pb-6 lg:grid-cols-[minmax(340px,0.72fr)_minmax(700px,1.5fr)] lg:p-6 lg:pb-10 xl:grid-cols-[minmax(380px,0.64fr)_minmax(840px,1.62fr)] 2xl:grid-cols-[minmax(420px,0.58fr)_minmax(980px,1.72fr)]">
         <div className="flex min-w-0 flex-col gap-4">
           <TodayCard
             data={data}
@@ -154,7 +168,7 @@ export default function ScheduleOverview() {
             events={data?.week_events || data?.events || []}
             term={data?.zjut_term}
             onRefresh={refresh}
-            loading={loading}
+            loading={loading || refreshingOverview}
           />
         </div>
       </div>
@@ -477,8 +491,8 @@ function WeekTable({ courses, events, weekStartMs, weekEndMs }) {
       <div
         className="grid min-w-[760px] overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--deep-bg)]"
         style={{
-          gridTemplateColumns: "42px repeat(7, minmax(96px, 1fr))",
-          gridTemplateRows: `40px repeat(${PERIODS.length}, 66px)`,
+          gridTemplateColumns: "46px repeat(7, minmax(112px, 1fr))",
+          gridTemplateRows: `40px repeat(${PERIODS.length}, 70px)`,
         }}
       >
         <GridHeader style={{ gridColumn: 1, gridRow: 1 }}>节</GridHeader>

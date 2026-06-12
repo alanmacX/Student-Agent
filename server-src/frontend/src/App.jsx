@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, Component } from "react";
-import { Calendar, MessageSquare, Settings, Bell, Lightbulb, KeyRound } from "lucide-react";
+import { KeyRound } from "lucide-react";
+import DesktopNavRail from "./components/layout/DesktopNavRail";
 import TabBar from "./components/layout/TabBar";
 import ScheduleOverview from "./components/schedule/ScheduleOverview";
 import ScheduleView from "./components/schedule/ScheduleView";
@@ -184,9 +185,9 @@ function App() {
     <div className="app-shell flex h-[100dvh] flex-col overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]">
       <div className="pointer-events-none fixed inset-x-0 top-0 h-px bg-white/15" />
 
-      <div className="flex min-h-0 flex-1 overflow-hidden md:p-3 md:pb-3">
+      <div className="flex min-h-0 flex-1 overflow-hidden md:p-3 md:pb-3 md:pl-[104px]">
         {/* Main content */}
-        <main className="min-w-0 flex-1 overflow-hidden md:rounded-[18px] md:border md:border-white/10 md:bg-[var(--panel-bg)] md:shadow-2xl md:shadow-black/30">
+        <main className="min-w-0 flex-1 overflow-hidden md:rounded-[26px] md:border md:border-[var(--glass-border)] md:bg-[var(--panel-bg)] md:shadow-2xl md:shadow-black/20">
           <ErrorBoundary>
             {mountedTabs.has("overview") && <div className={tab !== "overview" ? "hidden" : "h-full"}><ScheduleOverview /></div>}
             {mountedTabs.has("agent") && <div className={tab !== "agent" ? "hidden" : "h-full"}><ScheduleView /></div>}
@@ -201,32 +202,8 @@ function App() {
       <DailyPopup />
 
       <TabBar active={tab} onChange={handleTabChange} onRefresh={handleRefresh} />
+      <DesktopNavRail active={tab} onChange={handleTabChange} onRefresh={handleRefresh} />
       {tokenRequired && <AccessTokenDialog onClose={() => setTokenRequired(false)} />}
-
-      {/* Desktop tab strip - top right */}
-      <div className="absolute right-5 top-5 z-10 hidden overflow-hidden rounded-full border border-white/10 bg-black/20 p-1 shadow-lg shadow-black/20 backdrop-blur-xl md:flex">
-        {[
-          { id: "overview", label: "总览", icon: Calendar },
-          { id: "agent", label: "Agent", icon: MessageSquare },
-          { id: "hub", label: "Hub", icon: Lightbulb },
-          { id: "notifications", label: "通知", icon: Bell },
-          { id: "settings", label: "设置", icon: Settings },
-        ].map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => handleTabChange(id)}
-            className={`flex h-9 items-center gap-2 rounded-full px-3 text-xs font-medium transition ${
-              tab === id
-                ? "bg-white/14 text-white shadow-sm"
-                : "text-[var(--text-tertiary)] hover:bg-white/8 hover:text-white"
-            }`}
-            title={label}
-          >
-            <Icon size={18} />
-            {id === tab && <span>{label}</span>}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

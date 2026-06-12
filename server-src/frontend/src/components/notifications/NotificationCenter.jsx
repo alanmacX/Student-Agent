@@ -84,7 +84,7 @@ function NotificationItem({ item }) {
 
   return (
     <div className="flex gap-3 px-4 py-3">
-      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-white/8">
+      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-[var(--surface)]">
         {typeIcon(item.notif_type)}
       </div>
       <div className="min-w-0 flex-1">
@@ -116,7 +116,7 @@ function StatsBar({ notifications }) {
   if (total === 0) return null;
 
   return (
-    <div className="glass-card grid grid-cols-4 gap-3 px-4 py-3 lg:grid-cols-2">
+    <div className="surface-card grid grid-cols-4 gap-3 px-4 py-3 lg:grid-cols-2 xl:grid-cols-4">
       {[
         { label: "总计", value: total, color: "text-white" },
         { label: "已送达", value: received, color: "text-blue-400" },
@@ -151,7 +151,7 @@ function SentTab({ groups }) {
           <p className="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-tertiary)]">
             {label}
           </p>
-          <div className="glass-card overflow-hidden">
+          <div className="surface-card overflow-hidden">
             {items.map((item, idx) => (
               <div key={item.id} className={idx < items.length - 1 ? "border-b border-[rgba(255,255,255,0.07)]" : ""}>
                 <NotificationItem item={item} />
@@ -179,7 +179,7 @@ function ScheduledTab({ items }) {
   return (
     <div className="stagger mx-auto flex w-full flex-col gap-3">
       {items.map((item) => (
-        <div key={item.id} className="glass-card px-4 py-3">
+        <div key={item.id} className="surface-card px-4 py-3">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-white truncate">{item.title || "未命名通知"}</p>
@@ -215,7 +215,7 @@ function StandbyTab({ items }) {
   return (
     <div className="stagger mx-auto flex w-full flex-col gap-2">
       {items.map((item) => (
-        <div key={item.id} className="glass-card px-4 py-3">
+        <div key={item.id} className="surface-card px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <DecisionBadge decision={item.decision} />
@@ -302,6 +302,7 @@ export default function NotificationCenter() {
     load();
 
     const startPolling = () => {
+      if (pollRef.current) return;
       pollRef.current = window.setInterval(() => load(true), POLL_INTERVAL);
     };
     const stopPolling = () => {
@@ -345,7 +346,7 @@ export default function NotificationCenter() {
   return (
     <div className="relative flex h-full flex-col bg-[var(--panel-bg)]">
       {/* Header — floating island over the scrolling content */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 mx-auto flex w-full max-w-6xl items-center justify-between gap-2 px-3 pt-3 md:px-6">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 mx-auto flex w-full max-w-[1500px] items-center justify-between gap-2 px-3 pt-3 md:px-6 xl:px-8">
         <div className="glass-pill pointer-events-auto flex min-h-[48px] items-center rounded-full px-5 py-2">
           <h2 className="text-sm font-semibold text-white">通知</h2>
         </div>
@@ -360,8 +361,8 @@ export default function NotificationCenter() {
       </div>
 
       {/* Scroll body — content flows beneath the floating header */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-[72px] pb-36 md:pb-4 md:px-6">
-        <div className="mx-auto grid w-full max-w-6xl gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-[72px] pb-36 md:pb-4 md:px-6 xl:px-8">
+        <div className="mx-auto grid w-full max-w-[1500px] gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)]">
           <aside className="min-w-0 space-y-3 lg:sticky lg:top-3 lg:self-start">
             {/* Tabs — glass segmented control */}
             <div className="glass-pill flex gap-1 rounded-full p-1.5 lg:flex-col lg:rounded-2xl">

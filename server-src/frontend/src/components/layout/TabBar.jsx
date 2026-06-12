@@ -1,13 +1,6 @@
-import { MessageSquare, Calendar, Settings, Bell, RefreshCw, Lightbulb } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useState } from "react";
-
-const TABS = [
-  { id: "overview", label: "总览", icon: Calendar },
-  { id: "agent", label: "Agent", icon: MessageSquare },
-  { id: "hub", label: "Hub", icon: Lightbulb },
-  { id: "notifications", label: "通知", icon: Bell },
-  { id: "settings", label: "设置", icon: Settings },
-];
+import { NAV_ITEMS } from "./navItems";
 
 export default function TabBar({ active, onChange, onRefresh }) {
   const [refreshing, setRefreshing] = useState(false);
@@ -40,7 +33,7 @@ export default function TabBar({ active, onChange, onRefresh }) {
           borderRadius: "999px",
         }}
       >
-        {TABS.map(({ id, label, icon: Icon }) => {
+        {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
           const isActive = active === id;
           return (
             <button

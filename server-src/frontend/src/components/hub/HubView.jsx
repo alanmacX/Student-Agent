@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity, AlertTriangle, CalendarDays, CalendarRange, CheckCircle2, Clock, Lightbulb, Plus, RefreshCw, ShieldCheck, StickyNote, Trash2 } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import RemindersPanel from "../settings/RemindersPanel";
@@ -8,18 +8,28 @@ export default function HubView() {
   const [input, setInput] = useState("");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [dashboardError, setDashboardError] = useState("");
+  const dashboardRef = useRef(null);
 
-  const refreshDashboard = async () => {
-    setLoading(true);
+  const refreshDashboard = async ({ soft = false } = {}) => {
+    const hasDashboard = dashboardRef.current !== null;
+    if (soft || hasDashboard) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setDashboardError("");
     try {
-      setDashboard(await apiFetch("/api/dashboard/today"));
+      const next = await apiFetch("/api/dashboard/today");
+      dashboardRef.current = next;
+      setDashboard(next);
     } catch (e) {
       console.error("Failed to load dashboard:", e);
       setDashboardError("今天的面板暂时没拉下来。");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -57,7 +67,7 @@ export default function HubView() {
     loadIdeas();
     const handler = (event) => {
       if (event.detail?.tab && event.detail.tab !== "hub") return;
-      refreshDashboard();
+      refreshDashboard({ soft: true });
       loadIdeas();
     };
     window.addEventListener("app-refresh", handler);
@@ -67,26 +77,26 @@ export default function HubView() {
   return (
     <div className="relative flex h-full flex-col bg-[var(--panel-bg)]">
       {/* Floating header */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 mx-auto flex w-full max-w-7xl items-center justify-between gap-2 px-3 pt-3 md:px-6">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 mx-auto flex w-full max-w-[1500px] items-center justify-between gap-2 px-3 pt-3 md:px-6 xl:px-8">
         <div className="glass-pill pointer-events-auto flex min-h-[48px] items-center rounded-full px-5 py-2">
           <Lightbulb size={16} className="mr-2 text-yellow-400" />
           <h2 className="text-sm font-semibold text-white">Hub</h2>
         </div>
         <button
-          onClick={refreshDashboard}
+          onClick={() => refreshDashboard({ soft: true })}
           className="glass-pill pointer-events-auto grid h-12 w-12 place-items-center rounded-full text-[var(--text-secondary)] hover:text-white"
           aria-label="刷新"
         >
-          <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+          <RefreshCw size={16} className={loading || refreshing ? "animate-spin" : ""} />
         </button>
       </div>
 
       {/* Scrollable content */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-[72px] pb-36 md:pb-4 md:px-6">
-        <div className="mx-auto max-w-7xl space-y-4 stagger">
-          <DashboardSummary data={dashboard} loading={loading} error={dashboardError} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-[72px] pb-36 md:pb-4 md:px-6 xl:px-8">
+        <div className="mx-auto max-w-[1500px] space-y-4 stagger">
+          <DashboardSummary data={dashboard} loading={loading || refreshing} error={dashboardError} />
 
-          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.85fr)] xl:grid-cols-[minmax(0,1.5fr)_minmax(400px,0.9fr)]">
+          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.85fr)] xl:grid-cols-[minmax(0,1.65fr)_minmax(420px,0.85fr)] 2xl:grid-cols-[minmax(0,1.8fr)_minmax(460px,0.78fr)]">
             <div className="min-w-0 space-y-4">
               <section className="surface-card animate-rise p-4">
                 <SectionTitle icon={AlertTriangle} label="逾期" tone="danger" />
@@ -134,6 +144,7 @@ export default function HubView() {
                   <button
                     onClick={addNote}
                     disabled={!input.trim()}
+                    aria-label="添加点子"
                     className="rounded-xl bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-30"
                   >
                     <Plus size={16} />

@@ -38,6 +38,9 @@
   --glass-blur: blur(3px) saturate(145%);      /* barely-there frost — content reads clearly behind */
   --glass-shadow: 0 10px 36px rgba(0, 0, 0, 0.46);
   --glass-shadow-sm: 0 3px 16px rgba(0, 0, 0, 0.34);
+  --content-card-bg: rgba(255, 255, 255, 0.055);
+  --content-card-border: rgba(255, 255, 255, 0.10);
+  --content-card-shadow: 0 14px 38px rgba(0, 0, 0, 0.18);
 
   /* Floating tab bar shares the system; uses the stronger body for legibility. */
   --tab-float-bg: var(--glass-bg-strong);
@@ -88,6 +91,9 @@
     --glass-border-bright: rgba(0, 0, 0, 0.16);
     --glass-shadow: 0 10px 36px rgba(0, 0, 0, 0.14);
     --glass-shadow-sm: 0 3px 16px rgba(0, 0, 0, 0.09);
+    --content-card-bg: rgba(255, 255, 255, 0.72);
+    --content-card-border: rgba(0, 0, 0, 0.085);
+    --content-card-shadow: 0 14px 34px rgba(31, 35, 45, 0.09);
   }
 
   /* Override text-white for headings/labels in light mode */
@@ -236,6 +242,128 @@ textarea {
   background: var(--glass-bg-strong);
 }
 
+.desktop-nav-rail {
+  position: fixed;
+  z-index: 50;
+  left: max(18px, calc(env(safe-area-inset-left) + 18px));
+  top: 50%;
+  display: none;
+  transform: translateY(-50%);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.desktop-nav-rail__group,
+.desktop-nav-action {
+  position: relative;
+  isolation: isolate;
+  pointer-events: auto;
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow-sm);
+}
+
+.desktop-nav-rail__group {
+  display: flex;
+  width: 58px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  overflow: visible;
+  border-radius: 999px;
+  padding: 7px;
+}
+
+.desktop-nav-button {
+  display: flex;
+  height: 44px;
+  width: 44px;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-tertiary);
+  padding: 0 12px;
+  white-space: nowrap;
+  outline: none;
+  transition:
+    width 0.28s var(--ease-spring),
+    background-color 0.22s var(--ease-smooth),
+    color 0.22s var(--ease-smooth),
+    box-shadow 0.22s var(--ease-smooth),
+    transform 0.22s var(--ease-spring);
+}
+
+.desktop-nav-button:hover,
+.desktop-nav-button:focus-visible {
+  width: 132px;
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+}
+
+.desktop-nav-button:active {
+  transform: scale(0.96);
+}
+
+.desktop-nav-button.is-active {
+  background: var(--hover-bg-strong);
+  color: var(--text-primary);
+}
+
+.desktop-nav-label {
+  display: inline-block;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(-4px);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1;
+  transition:
+    max-width 0.24s var(--ease-smooth),
+    opacity 0.16s var(--ease-smooth),
+    transform 0.22s var(--ease-spring);
+}
+
+.desktop-nav-button:hover .desktop-nav-label,
+.desktop-nav-button:focus-visible .desktop-nav-label {
+  max-width: 86px;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.desktop-nav-action {
+  height: 58px;
+  width: 58px;
+  overflow: visible;
+  border-radius: 999px;
+  padding: 0 19px;
+}
+
+.desktop-nav-action:disabled {
+  opacity: 0.55;
+}
+
+@media (min-width: 768px) {
+  .desktop-nav-rail {
+    display: flex;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-nav-button,
+  .desktop-nav-label {
+    transition: none;
+  }
+}
+
 .glass-header {
   background: var(--glass-bg-strong);
   border-bottom: 1px solid var(--glass-border);
@@ -245,9 +373,10 @@ textarea {
 
 /* HIG: content layer surface — no glass, no backdrop blur */
 .surface-card {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: var(--content-card-bg);
+  border: 1px solid var(--content-card-border);
   border-radius: var(--radius-lg);
+  box-shadow: var(--content-card-shadow);
 }
 
 /* ── Unified content card (iOS26 spec) ───────────────────────────────────────
