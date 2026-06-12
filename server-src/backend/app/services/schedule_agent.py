@@ -809,8 +809,6 @@ async def _execute_schedule_tool(
             record_id=tc.arguments.get("id", ""),
         )
         return json.dumps(result, ensure_ascii=False, indent=2)
-    elif tc.name == "get_schedule_context":
-        return await _get_schedule_context(chaoxing_svc, db_path)
     elif tc.name in ("read_message_memory", "get_chaoxing_memory"):
         importance = tc.arguments.get("importance_filter", "high_and_medium")
         return await _get_chaoxing_memory(db_path, importance)
@@ -1783,61 +1781,6 @@ def _memory_item_active(item: dict, now: datetime) -> bool:
     if expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
     return expires >= now.astimezone(timezone.utc)
-
-
-async def _get_schedule_context(chaoxing_svc, db_path: str) -> str:
-    now = datetime.now(zoneinfo.ZoneInfo("Asia/Shanghai"))
-    parts = [f"当前时间: {now.strftime('%Y-%m-%d %H:%M')} ({now.strftime('%A')})"]
-
-    from .schedule_store import list_courses, list_events, list_reminders
-    reminders = await list_reminders(db_path)
-    events = await list_events(db_path, days=14)
-    courses = await list_courses(db_path, days=14)
-
-    if reminders:
-        parts.append("\n## 服务器提醒事项:")
-        for r in reminders[:12]:
-            due = r.get("dueDate") or "无截止"
-            parts.append(f"- {r.get('title')} | 清单: {r.get('listName')} | 截止: {due} | ID: {r.get('id')}")
-
-    if events:
-        parts.append("\n## 服务器日程:")
-        for e in events[:12]:
-            parts.append(f"- {e.get('title')} | {e.get('startDate')} - {e.get('endDate')} | {e.get('location') or ''}")
-
-    if courses:
-        parts.append("\n## 本地课程表:")
-        for c in courses[:12]:
-            parts.append(f"- {c.get('title')} | {c.get('startDate')} - {c.get('endDate')} | {c.get('location') or ''}")
-
-    # Get assignments — 只列未提交/未交的
-    assignments = await chaoxing_svc.fetch_all_pending_assignments()
-    assignments = [a for a in assignments if (a.get("status") or "").strip() in ("未交", "未提交")]
-    if assignments:
-        parts.append("\n## 待完成作业:")
-        for a in assignments[:10]:
-            parts.append(f"- {a.get('title', '未知')} | 课程: {a.get('courseName', '?')} | 截止: {a.get('dueDate', '?')}")
-
-    # Get memory entries
-    async with aiosqlite.connect(db_path) as db:
-        rows = await (await db.execute("""
-            SELECT title, summary, importance, action_hint, expires_at
-            FROM chaoxing_memory_entries
-            WHERE archived_at IS NULL AND importance IN ('high', 'medium')
-            ORDER BY CASE importance WHEN 'high' THEN 1 ELSE 2 END, sent_at DESC
-            LIMIT 10
-        """)).fetchall()
-
-    if rows:
-        parts.append("\n## 重要消息记忆:")
-        for r in rows:
-            item = {"title": r[0], "summary": r[1], "action_hint": r[3], "expires_at": r[4]}
-            if _memory_item_active(item, datetime.now(timezone.utc)):
-                parts.append(f"- [{r[2]}] {r[0]}: {r[1]}")
-                if r[3]:
-                    parts.append(f"  行动: {r[3]}")
-
-    return "\n".join(parts) if parts else "暂无日程信息。"
 
 
 async def _get_chaoxing_memory(db_path: str, importance_filter: str) -> str:

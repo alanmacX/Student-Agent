@@ -72,9 +72,9 @@ async def select_tools_for_query(
         if response.usage:
             try:
                 from app.config import settings
-                from app.services.budget import log_usage
+                from app.services.budget import log_usage_later
 
-                await log_usage(settings.database_path, "tool_router", light_provider.get("id", ""), light_model, response.usage)
+                log_usage_later(settings.database_path, "tool_router", light_provider.get("id", ""), light_model, response.usage)
             except Exception:
                 pass
             usage = {

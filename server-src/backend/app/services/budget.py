@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -81,3 +82,23 @@ async def log_usage(
             ),
         )
         await db.commit()
+
+
+def log_usage_later(
+    db_path: str,
+    callpoint: str,
+    provider_id: str,
+    model: str,
+    usage,
+    now: datetime | None = None,
+) -> None:
+    async def _run():
+        try:
+            await log_usage(db_path, callpoint, provider_id, model, usage, now)
+        except Exception:
+            pass
+
+    try:
+        asyncio.create_task(_run())
+    except RuntimeError:
+        pass

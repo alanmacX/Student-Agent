@@ -11,7 +11,7 @@ import aiosqlite
 from app.config import settings
 from app.database import db_conn
 from app.services.agent_service import AgentMsg, agent_complete
-from app.services.budget import budget_day, daily_token_budget, log_usage, tokens_used_today
+from app.services.budget import budget_day, daily_token_budget, log_usage_later, tokens_used_today
 from app.services.provider_registry import resolve_provider
 from app.services.time_utils import LOCAL_TZ, local_day_window, parse_any_time, to_utc_iso, utc_now
 from app.services.tool_router import resolve_light_agent_provider
@@ -256,10 +256,7 @@ async def refresh_briefing(db_path: str, payload: dict[str, Any] | None = None, 
             [], provider, model, api_key,
         )
         if response.usage:
-            try:
-                await log_usage(db_path, "dashboard_briefing", provider.get("id", ""), model, response.usage)
-            except Exception:
-                pass
+            log_usage_later(db_path, "dashboard_briefing", provider.get("id", ""), model, response.usage)
         text, todos = _parse_briefing_json(response.text or "")
         if not text:
             raise ValueError("empty briefing")

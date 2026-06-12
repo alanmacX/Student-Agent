@@ -283,15 +283,11 @@ async def run_agentic_loop(
             usage_dict = _usage_to_dict(response.usage, model=model, provider=provider_id)
             try:
                 from app.config import settings
-                from app.services.budget import log_usage
+                from app.services.budget import log_usage_later
 
-                await log_usage(settings.database_path, "agent_loop", provider_id, model, response.usage)
+                log_usage_later(settings.database_path, "agent_loop", provider_id, model, response.usage)
             except Exception:
                 pass
-            from .api_service import estimate_cost
-            cost = await estimate_cost(model, response.usage.input_tokens, response.usage.output_tokens, provider_id)
-            if cost is not None:
-                usage_dict["estimated_cost_usd"] = round(cost, 6)
             yield {"type": "usage", "usage": usage_dict}
 
         if not response.tool_calls:
@@ -394,7 +390,12 @@ def _tool_keywords(tool_name: str) -> list[str]:
         "fetch_url":               ["http", "url", "网页", "链接", "网站"],
         "search_web":              ["搜索", "查找", "找", "search"],
         "read_pdf":                ["pdf", "文件", "文档"],
-        "get_schedule_context":    ["课", "作业", "日程", "提醒"],
+        "get_current_time":        ["今天", "明天", "后天", "本周", "下周", "时间", "日期"],
+        "get_data_schema":         ["schema", "表结构", "字段", "有哪些表", "数据库结构"],
+        "search_records":          ["课", "作业", "日程", "提醒", "通知", "ddl", "deadline",
+                                    "课程", "考试", "安排", "学习通", "钉钉"],
+        "search_database":         ["数据库", "sql", "表", "记录", "查询", "统计"],
+        "get_record_detail":       ["详情", "原文", "完整", "展开"],
         "send_push_notification":  ["提醒", "通知", "推送", "notify", "remind",
                                     "截止", "deadline", "别忘了", "记得"],
     }.get(tool_name, [tool_name])
