@@ -68,6 +68,7 @@ _SCHEMA = """
         year             TEXT,
         term             TEXT,
         week1_monday     TEXT,
+        semester_label   TEXT,
         save_credentials INTEGER NOT NULL DEFAULT 0,
         last_import_at   TEXT,
         updated_at       TEXT
@@ -473,6 +474,9 @@ _COLUMN_MIGRATIONS: list[str] = [
 
     # ── standby_agent_log: reason column ─────────────────────────────────
     "ALTER TABLE standby_agent_log ADD COLUMN reason TEXT",
+
+    # ── zjut_config: semester label added after initial table ────────────
+    "ALTER TABLE zjut_config ADD COLUMN semester_label TEXT",
 
     # ── dingtalk_filter_config: user-configurable filter rules ───────────
     # Single-row config table (id=1). conv_mode controls conversation filtering:

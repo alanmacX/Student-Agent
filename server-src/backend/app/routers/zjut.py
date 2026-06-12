@@ -36,21 +36,18 @@ async def probe(request: Request):
 
 @router.post("/import")
 async def do_import(request: Request):
+    """只需 student_id + password;学年/学期/开学日全自动检测。"""
     b = await request.json()
     sid, pw = (b.get("student_id") or "").strip(), b.get("password") or ""
-    year, term = (b.get("year") or "").strip(), (b.get("term") or "").strip()
-    week1 = (b.get("week1_monday") or "").strip()
     save = bool(b.get("save_credentials", False))
-    if not (sid and pw and year and term and week1):
-        return {"ok": False, "error": "需要 student_id / password / year / term / week1_monday(YYYY-MM-DD)"}
+    if not (sid and pw):
+        return {"ok": False, "error": "需要 student_id 和 password"}
     if save and not (settings.zjut_key or "").strip():
-        return {"ok": False, "error": "服务器未配置 ZJUT_KEY,无法加密存储凭据;请先取消保存或配置密钥"}
+        return {"ok": False, "error": "服务器未配置 ZJUT_KEY,无法加密存储凭据"}
     try:
-        result = await zjut_import.run_import(
-            settings.database_path, student_id=sid, password=pw, year=year, term=term, week1_monday=week1)
-        await zjut_import.save_config(
-            settings.database_path, student_id=sid, password=pw, year=year, term=term,
-            week1_monday=week1, save_credentials=save)
+        if save:
+            await zjut_import.save_config(settings.database_path, student_id=sid, password=pw, save_credentials=True)
+        result = await zjut_import.run_import(settings.database_path, student_id=sid, password=pw)
     except zjut.ZjutError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:  # noqa: BLE001
@@ -60,15 +57,14 @@ async def do_import(request: Request):
 
 
 @router.post("/refresh")
-async def refresh(request: Request):
-    """用已存凭据重新导入。手动按钮 / Reconciler external_update 都走这里。"""
+async def refresh():
+    """用已存凭据重新导入(自动检测当前学期)。手动按钮 / Reconciler external_update 都走这里。"""
     creds = await zjut_import.stored_credentials(settings.database_path)
     if not creds:
         return {"ok": False, "error": "没有已保存的凭据,先在设置里导入一次并勾选保存"}
-    sid, pw, year, term, week1 = creds
+    sid, pw = creds
     try:
-        return await zjut_import.run_import(
-            settings.database_path, student_id=sid, password=pw, year=year, term=term, week1_monday=week1)
+        return await zjut_import.run_import(settings.database_path, student_id=sid, password=pw)
     except zjut.ZjutError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:  # noqa: BLE001
@@ -83,8 +79,7 @@ async def status():
     return {
         "configured": True,
         "student_id": cfg.get("student_id"),
-        "year": cfg.get("year"),
-        "term": cfg.get("term"),
+        "semester_label": cfg.get("semester_label"),
         "week1_monday": cfg.get("week1_monday"),
         "credentials_saved": bool(cfg.get("save_credentials")),
         "last_import_at": cfg.get("last_import_at"),

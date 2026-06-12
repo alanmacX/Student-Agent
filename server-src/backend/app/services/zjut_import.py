@@ -53,20 +53,15 @@ def decrypt(blob: str) -> str:
 
 # ── 凭据 / 配置存储 ────────────────────────────────────────────────────────────
 
-async def save_config(db_path: str, *, student_id: str, password: str | None,
-                      year: str, term: str, week1_monday: str, save_credentials: bool) -> None:
+async def save_config(db_path: str, *, student_id: str, password: str,
+                      save_credentials: bool) -> None:
+    """只处理凭据(学号 + 是否加密存密码)。学年/学期/开学日由 run_import 自动写入。"""
+    pw_enc = encrypt(password) if (save_credentials and password) else None
     async with aiosqlite.connect(db_path) as db:
-        row = await (await db.execute("SELECT password_enc FROM zjut_config WHERE id=1")).fetchone()
-        existing_pw = row[0] if row else None
-        pw_enc = encrypt(password) if (save_credentials and password) else (existing_pw if save_credentials else None)
+        await db.execute("INSERT OR IGNORE INTO zjut_config (id, save_credentials) VALUES (1, 0)")
         await db.execute(
-            """INSERT INTO zjut_config (id, student_id, password_enc, year, term, week1_monday, save_credentials, updated_at)
-               VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                 student_id=excluded.student_id, password_enc=excluded.password_enc,
-                 year=excluded.year, term=excluded.term, week1_monday=excluded.week1_monday,
-                 save_credentials=excluded.save_credentials, updated_at=excluded.updated_at""",
-            (student_id, pw_enc, year, term, week1_monday, 1 if save_credentials else 0,
+            "UPDATE zjut_config SET student_id=?, password_enc=?, save_credentials=?, updated_at=? WHERE id=1",
+            (student_id, pw_enc, 1 if save_credentials else 0,
              datetime.now(timezone.utc).isoformat()),
         )
         await db.commit()
@@ -79,13 +74,12 @@ async def get_config(db_path: str) -> dict | None:
     return dict(row) if row else None
 
 
-async def stored_credentials(db_path: str) -> tuple[str, str, str, str, str] | None:
-    """返回 (student_id, password, year, term, week1_monday) 或 None。"""
+async def stored_credentials(db_path: str) -> tuple[str, str] | None:
+    """返回 (student_id, password) 或 None。学期每次刷新自动检测,不依赖存储。"""
     cfg = await get_config(db_path)
     if not cfg or not cfg.get("save_credentials") or not cfg.get("password_enc"):
         return None
-    return (cfg["student_id"], decrypt(cfg["password_enc"]),
-            cfg["year"], cfg["term"], cfg["week1_monday"])
+    return cfg["student_id"], decrypt(cfg["password_enc"])
 
 
 # ── 展开课表 → server_courses ──────────────────────────────────────────────────
@@ -168,20 +162,35 @@ async def _write(db_path: str, course_rows: list[dict], exam_rows: list[dict]) -
             [(r["id"], r["title"], r["start_at"], r["end_at"], r["location"], r["notes"], now, now)
              for r in exam_rows],
         )
-        await db.execute("UPDATE zjut_config SET last_import_at=? WHERE id=1", (now,))
         await db.commit()
 
 
-async def run_import(db_path: str, *, student_id: str, password: str, year: str,
-                     term: str, week1_monday: str) -> dict:
-    """登录→拉取→展开→写库。返回统计。调用方负责(可选)存凭据。"""
+async def run_import(db_path: str, *, student_id: str, password: str,
+                     year: str = "", term: str = "", week1_monday: str = "") -> dict:
+    """登录→自动检测学期→拉取→展开→写库。year/term/week1 留空则全自动检测。"""
     from app.services import zjut
     data = await zjut.fetch_timetable_and_exams(student_id, password, year, term)
-    course_rows = expand_courses(data["courses"], week1_monday)
+    sem = data.get("semester") or {}
+    wk1 = week1_monday or sem.get("week1_monday") or ""
+    if not wk1:
+        raise zjut.ZjutError("无法确定开学日(第1周周一)")
+    course_rows = expand_courses(data["courses"], wk1)
     exam_rows = expand_exams(data["exams"])
     await _write(db_path, course_rows, exam_rows)
+    # 记下检测到的学期信息 + 本次导入时间(供界面显示);不碰 password/save 字段
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("INSERT OR IGNORE INTO zjut_config (id, save_credentials) VALUES (1, 0)")
+        await db.execute(
+            "UPDATE zjut_config SET student_id=?, year=?, term=?, week1_monday=?, "
+            "semester_label=?, last_import_at=? WHERE id=1",
+            (student_id, sem.get("year", year), sem.get("term", term), wk1,
+             sem.get("label", ""), now),
+        )
+        await db.commit()
     return {
         "ok": True,
+        "semester": sem.get("label", ""),
         "courses_fetched": len(data["courses"]),
         "course_sessions_written": len(course_rows),
         "exams_written": len(exam_rows),

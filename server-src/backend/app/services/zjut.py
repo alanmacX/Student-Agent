@@ -19,6 +19,7 @@ BASE = "http://www.gdjw.zjut.edu.cn"
 LOGIN_PAGE = "/jwglxt/xtgl/login_slogin.html"
 SSO_ENTRY = "/sso/zfiotlogin"
 PUBKEY_PATH = "v2/getPubKey"
+AREA_FIVE = "/jwglxt/xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index"
 SCHEDULE_PAGE = "/jwglxt/kbcx/xskbcx_cxXskbcxIndex.html?gnmkdm=N253508"
 SCHEDULE = "/jwglxt/kbcx/xskbcx_cxXsgrkb.html?gnmkdm=N253508"
 EXAMS_PAGE = "/jwglxt/kwgl/kscx_cxXsksxxIndex.html?gnmkdm=N358105"
@@ -268,15 +269,41 @@ async def _post_query(client: httpx.AsyncClient, warm: str, query: str, year: st
         raise ZjutError(f"正方返回非 JSON(会话可能失效):{str(e)}")
 
 
-async def fetch_timetable_and_exams(student_id: str, password: str, year: str, term: str) -> dict:
-    """登录一次,拉课表+考试,返回结构化数据。year 如 '2025'(指 2025-2026 学年)。"""
+# 校历头部:如 "2025-2026学年2学期(2026-03-02至2026-07-05)"
+_SEM_RE = re.compile(r"(\d{4})-\d{4}学年(\d)学期\((\d{4}-\d{2}-\d{2})至(\d{4}-\d{2}-\d{2})\)")
+
+
+async def _fetch_semester(client: httpx.AsyncClient) -> dict | None:
+    """从校历区块自动读出当前学年/学期/开学日(第1周周一),用户无需手填。"""
+    r = await client.post(BASE + AREA_FIVE, headers={"accept": "*/*"})
+    m = _SEM_RE.search(r.text)
+    if not m:
+        return None
+    year, term, start, end = m.group(1), m.group(2), m.group(3), m.group(4)
+    return {
+        "year": year, "term": term,
+        "week1_monday": start,           # 学期起始日即第1周周一(正方按周一起算)
+        "start": start, "end": end,
+        "label": f"{year}-{int(year) + 1}学年第{term}学期",
+    }
+
+
+async def fetch_timetable_and_exams(student_id: str, password: str,
+                                    year: str = "", term: str = "") -> dict:
+    """登录一次。year/term 留空则自动检测当前学期。返回 {semester, courses, exams}。"""
     async with httpx.AsyncClient(
         follow_redirects=True, timeout=25.0, headers={"user-agent": UA, "accept-language": "zh-CN"}
     ) as client:
         await _login(client, student_id, password)
-        sched_json = await _post_query(client, SCHEDULE_PAGE, SCHEDULE, year, term)
-        exam_json = await _post_query(client, EXAMS_PAGE, EXAMS, year, term)
+        semester = await _fetch_semester(client)
+        use_year = year or (semester["year"] if semester else "")
+        use_term = term or (semester["term"] if semester else "")
+        if not use_year or not use_term:
+            raise ZjutError("拿不到当前学期信息,且未手动指定 year/term")
+        sched_json = await _post_query(client, SCHEDULE_PAGE, SCHEDULE, use_year, use_term)
+        exam_json = await _post_query(client, EXAMS_PAGE, EXAMS, use_year, use_term)
         return {
+            "semester": semester,
             "courses": parse_schedule(sched_json),
             "exams": parse_exams(exam_json),
         }
