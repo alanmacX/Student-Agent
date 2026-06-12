@@ -8,7 +8,8 @@ from app.database import db_conn
 from app.services.agent_service import AgentMsg, ToolDefinition, agent_complete
 from app.services.provider_registry import resolve_provider
 
-CORE_TOOLS = {"get_current_time", "get_data_schema", "search_records", "search_database", "get_record_detail"}
+CORE_TOOLS = {"get_current_time", "search_records", "get_record_detail"}
+DATABASE_TOOLS = {"get_data_schema", "search_database"}
 READ_FALLBACK = {
     "list_reminders", "list_calendar_events", "list_courses",
     "read_message_memory", "get_chaoxing_assignments", "kb_search",
@@ -16,6 +17,8 @@ READ_FALLBACK = {
 HEAVY_RAW_TOOLS = {"read_dingtalk_messages", "get_chaoxing_messages"}
 WRITE_HINT_RE = re.compile(r"(提醒我|创建|新建|添加|删除|删掉|完成|改成|更新|取消|安排|推送|记住|保存|导入)", re.I)
 RAW_MESSAGE_HINT_RE = re.compile(r"(钉钉|DingTalk|群聊|私聊|聊天记录|原文|原始消息|学习通消息|消息列表)", re.I)
+DB_HINT_RE = re.compile(r"(数据库|SQL|select|where|表结构|字段|schema|统计|聚合|精确条件|due_at|created_at|updated_at)", re.I)
+SCHEDULE_FACT_HINT_RE = re.compile(r"(今天|明天|后天|本周|下周|ddl|DDL|通知|课程?|上课|作业|提醒|日程|安排|验收|截止)", re.I)
 
 
 async def resolve_light_agent_provider(default_provider: dict, default_model: str, default_api_key: str):
@@ -90,15 +93,22 @@ async def select_tools_for_query(
             }
         if not selected or float(parsed.get("confidence") or 0) < 0.35:
             selected = _fallback_tool_names(user_message, tools)
+        selected = _drop_database_tools_without_hint(user_message, selected)
+        selected = _augment_schedule_read_tools(user_message, selected, tools)
         selected = _drop_heavy_raw_tools(user_message, selected)
         return selected, usage
     except Exception as exc:
-        return _drop_heavy_raw_tools(user_message, _fallback_tool_names(user_message, tools)), {"phase": "tool_router", "error": str(exc)[:200]}
+        selected = _fallback_tool_names(user_message, tools)
+        selected = _drop_database_tools_without_hint(user_message, selected)
+        selected = _augment_schedule_read_tools(user_message, selected, tools)
+        return _drop_heavy_raw_tools(user_message, selected), {"phase": "tool_router", "error": str(exc)[:200]}
 
 
 def _fallback_tool_names(user_message: str, tools: list[ToolDefinition]) -> list[str]:
     names = {t.name for t in tools}
     selected = set(CORE_TOOLS) | (READ_FALLBACK & names)
+    if DB_HINT_RE.search(user_message or ""):
+        selected |= DATABASE_TOOLS & names
     if WRITE_HINT_RE.search(user_message or ""):
         selected |= {n for n in names if n.startswith(("create_", "update_", "delete_", "complete_", "schedule_", "cancel_", "save_", "send_", "import_", "set_"))}
     return [t.name for t in tools if t.name in selected]
@@ -113,6 +123,8 @@ def _sanitize_tool_names(values: list[Any], available: set[str]) -> list[str]:
     for core in CORE_TOOLS:
         if core in available and core not in out:
             out.append(core)
+    if "search_database" in out and "get_data_schema" in available and "get_data_schema" not in out:
+        out.append("get_data_schema")
     return out
 
 
@@ -120,6 +132,24 @@ def _drop_heavy_raw_tools(user_message: str, selected: list[str]) -> list[str]:
     if RAW_MESSAGE_HINT_RE.search(user_message or ""):
         return selected
     return [name for name in selected if name not in HEAVY_RAW_TOOLS]
+
+
+def _drop_database_tools_without_hint(user_message: str, selected: list[str]) -> list[str]:
+    if DB_HINT_RE.search(user_message or ""):
+        return selected
+    return [name for name in selected if name not in DATABASE_TOOLS]
+
+
+def _augment_schedule_read_tools(user_message: str, selected: list[str], tools: list[ToolDefinition]) -> list[str]:
+    if not SCHEDULE_FACT_HINT_RE.search(user_message or ""):
+        return selected
+    names = {t.name for t in tools}
+    wanted = READ_FALLBACK & names
+    merged = list(selected)
+    for tool in tools:
+        if tool.name in wanted and tool.name not in merged:
+            merged.append(tool.name)
+    return merged
 
 
 def _parse_router_json(text: str) -> dict[str, Any]:
