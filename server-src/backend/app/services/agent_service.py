@@ -261,12 +261,16 @@ async def run_agentic_loop(
     api_key: str,
     max_iterations: int = 8,
     thinking_budget: int = 0,
+    require_tool_call: bool = False,
+    tool_retry_message: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Full agentic loop with parallel tool execution."""
     history = merge_system_messages(initial_messages)
     intra_turn: list[AgentMsg] = []
     failure_summaries = []
     reached_final = False
+    tool_used = False
+    missing_tool_retry_done = False
 
     for _ in range(max_iterations):
         trimmed_intra = _trim_intra_turn_pairs(intra_turn)
@@ -292,6 +296,13 @@ async def run_agentic_loop(
 
         if not response.tool_calls:
             final_text = (response.text or "").strip()
+            if require_tool_call and tools and not tool_used and not missing_tool_retry_done:
+                missing_tool_retry_done = True
+                intra_turn.append(AgentMsg(
+                    role="user",
+                    content=tool_retry_message or "你刚才没有调用工具。本轮必须先调用至少一个工具获取证据，再回答用户。",
+                ))
+                continue
             reached_final = True
             if failure_summaries and is_bare_completion(final_text):
                 yield {"type": "text", "content": _partial_failure_summary(failure_summaries)}
@@ -300,6 +311,7 @@ async def run_agentic_loop(
                 yield {"type": "text", "content": final_text}
             break
 
+        tool_used = True
         yield {"type": "tool_start", "tools": [{"name": tc.name, "id": tc.id} for tc in response.tool_calls]}
         raw_results = await asyncio.gather(
             *[tool_executor(tc) for tc in response.tool_calls],

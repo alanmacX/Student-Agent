@@ -25,6 +25,11 @@ STATIC_SYSTEM_PROMPT = """你是 ChatBot 的日程 Agent，负责提醒、日历
 - 最终回复使用中文，简洁但要保留关键证据。不要输出内联 HTML，结构化展示交给前端 payload。"""
 
 BARE_COMPLETION = {"完成", "done", "ok", "好的", "已完成"}
+EVIDENCE_QUERY_RE = re.compile(
+    r"(今天|明天|后天|本周|下周|最近|ddl|DDL|通知|课程?|上课|作业|提醒|日程|安排|"
+    r"什么|哪些|有关|相关|汇总|总结|查询|查一下|看看|有没有|多少|何时|什么时候|验收)",
+    re.I,
+)
 
 
 async def run_schedule_agent(
@@ -134,6 +139,12 @@ async def run_schedule_agent(
     async for event in run_agentic_loop(
         messages, tools, execute_tool, provider, model, api_key,
         max_iterations=8, thinking_budget=thinking_budget,
+        require_tool_call=_requires_evidence_tool(user_message),
+        tool_retry_message=(
+            "本轮问题涉及用户数据或日程事实，不能直接凭语言模型回答。"
+            "请先调用 get_current_time、search_database、get_data_schema 或一个领域读取工具取得证据；"
+            "如果查不到，再明确说明没查到。"
+        ),
     ):
         yield event
 
@@ -194,6 +205,15 @@ def build_dynamic_context(now: datetime | None = None) -> str:
 
 
 _build_dynamic_context = build_dynamic_context
+
+
+def _requires_evidence_tool(user_message: str) -> bool:
+    text = (user_message or "").strip()
+    if not text:
+        return False
+    if text in {"你好", "hi", "hello", "在吗", "谢谢", "ok", "好的"}:
+        return False
+    return bool(EVIDENCE_QUERY_RE.search(text) or "?" in text or "？" in text)
 
 
 def _build_schedule_tools() -> list:
