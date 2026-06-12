@@ -11,13 +11,11 @@ from app.services.provider_registry import resolve_provider
 CORE_TOOLS = {"get_current_time", "get_data_schema", "search_records", "search_database", "get_record_detail"}
 READ_FALLBACK = {
     "list_reminders", "list_calendar_events", "list_courses",
-    "get_chaoxing_assignments",
+    "read_message_memory", "get_chaoxing_assignments", "kb_search",
 }
 HEAVY_RAW_TOOLS = {"read_dingtalk_messages", "get_chaoxing_messages"}
-LEGACY_BROAD_READ_TOOLS = {"read_message_memory", "get_chaoxing_memory", "get_memory_insights", "kb_search"}
 WRITE_HINT_RE = re.compile(r"(提醒我|创建|新建|添加|删除|删掉|完成|改成|更新|取消|安排|推送|记住|保存|导入)", re.I)
 RAW_MESSAGE_HINT_RE = re.compile(r"(钉钉|DingTalk|群聊|私聊|聊天记录|原文|原始消息|学习通消息|消息列表)", re.I)
-LEGACY_READ_HINT_RE = re.compile(r"(memory|记忆库|知识库|关注项|watch|原文|原始消息|消息列表)", re.I)
 
 
 async def resolve_light_agent_provider(default_provider: dict, default_model: str, default_api_key: str):
@@ -49,9 +47,8 @@ async def select_tools_for_query(
     system = (
         "你是工具路由器，只选择工具，不回答用户问题。"
         "从给定工具列表中选出本轮主 agent 需要的工具名。"
-        "优先少选；复杂/跨表/调查类必须包含 search_database。"
-        "普通 DDL/通知/课程/调查优先使用 search_records/search_database；"
-        "除非用户明确问 memory/记忆库/知识库/原始消息，否则不要选择 get_memory_insights/read_message_memory/kb_search。"
+        "优先少选；普通 DDL/通知/课程/调查先选 search_records。"
+        "只有需要精确 SQL 条件、聚合统计、表结构推理或用户明确要求查数据库时，再选 search_database。"
         "写操作只有用户明确要求创建、修改、删除、提醒、推送、保存时才选择。"
         "输出严格 JSON：{\"tools\":[...],\"confidence\":0-1,\"reason\":\"简短原因\"}。"
     )
@@ -93,12 +90,10 @@ async def select_tools_for_query(
             }
         if not selected or float(parsed.get("confidence") or 0) < 0.35:
             selected = _fallback_tool_names(user_message, tools)
-        selected = _prefer_pull_tools(user_message, selected)
         selected = _drop_heavy_raw_tools(user_message, selected)
         return selected, usage
     except Exception as exc:
-        selected = _prefer_pull_tools(user_message, _fallback_tool_names(user_message, tools))
-        return _drop_heavy_raw_tools(user_message, selected), {"phase": "tool_router", "error": str(exc)[:200]}
+        return _drop_heavy_raw_tools(user_message, _fallback_tool_names(user_message, tools)), {"phase": "tool_router", "error": str(exc)[:200]}
 
 
 def _fallback_tool_names(user_message: str, tools: list[ToolDefinition]) -> list[str]:
@@ -125,12 +120,6 @@ def _drop_heavy_raw_tools(user_message: str, selected: list[str]) -> list[str]:
     if RAW_MESSAGE_HINT_RE.search(user_message or ""):
         return selected
     return [name for name in selected if name not in HEAVY_RAW_TOOLS]
-
-
-def _prefer_pull_tools(user_message: str, selected: list[str]) -> list[str]:
-    if LEGACY_READ_HINT_RE.search(user_message or ""):
-        return selected
-    return [name for name in selected if name not in LEGACY_BROAD_READ_TOOLS]
 
 
 def _parse_router_json(text: str) -> dict[str, Any]:
