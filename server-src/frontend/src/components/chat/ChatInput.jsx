@@ -51,6 +51,8 @@ export default function ChatInput({
   }, [onCommand, onChange]);
 
   const handleKeyDown = (e) => {
+    // 输入法组词中(中文候选)按 Enter 是"选词/上屏",不能当成发送/执行。
+    if (e.nativeEvent?.isComposing || e.isComposing || e.keyCode === 229) return;
     if (showPalette) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
