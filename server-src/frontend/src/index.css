@@ -271,11 +271,18 @@ textarea {
   display: flex;
   width: 58px;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 4px;
-  overflow: visible;
-  border-radius: 999px;
+  overflow: hidden;
+  border-radius: 28px;
   padding: 7px;
+  transition: width 0.28s var(--ease-spring);
+}
+
+/* When hovering the rail, the pill background grows to wrap the expanded
+   button+label, instead of the button sticking out past its container. */
+.desktop-nav-rail__group:hover {
+  width: 146px;
 }
 
 .desktop-nav-button {
@@ -300,9 +307,15 @@ textarea {
     transform 0.22s var(--ease-spring);
 }
 
-.desktop-nav-button:hover,
+/* Hover anywhere on the rail expands every button into a labeled row, and the
+   pill (above) grows to wrap them — so nothing sticks out past the container. */
+.desktop-nav-rail__group:hover .desktop-nav-button,
 .desktop-nav-button:focus-visible {
   width: 132px;
+}
+
+.desktop-nav-button:hover,
+.desktop-nav-button:focus-visible {
   background: var(--hover-bg);
   color: var(--text-primary);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
@@ -332,7 +345,7 @@ textarea {
     transform 0.22s var(--ease-spring);
 }
 
-.desktop-nav-button:hover .desktop-nav-label,
+.desktop-nav-rail__group:hover .desktop-nav-label,
 .desktop-nav-button:focus-visible .desktop-nav-label {
   max-width: 86px;
   opacity: 1;
