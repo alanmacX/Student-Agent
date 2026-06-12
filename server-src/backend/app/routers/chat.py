@@ -7,7 +7,7 @@ import asyncio
 import uuid
 import ipaddress
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 from app.database import db_conn
 from app.services.api_service import make_service
@@ -210,7 +210,7 @@ async def stream_chat(conv_id: str, request: Request):
         next_pos = (pos_row[0] or 0) + 1
 
         # Save user message
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         user_msg_id = str(uuid.uuid4())
         await db.execute(
             "INSERT INTO messages (id, conversation_id, role, content, timestamp, position) VALUES (?,?,?,?,?,?)",
@@ -287,11 +287,11 @@ async def stream_chat(conv_id: str, request: Request):
             async with db_conn() as db:
                 await db.execute(
                     "INSERT INTO messages (id, conversation_id, role, content, usage_json, timestamp, position) VALUES (?,?,?,?,?,?,?)",
-                    (assistant_msg_id, conv_id, "assistant", full_response, usage_json, datetime.utcnow().isoformat(), next_pos),
+                    (assistant_msg_id, conv_id, "assistant", full_response, usage_json, datetime.now(timezone.utc).isoformat(), next_pos),
                 )
                 await db.execute(
                     "UPDATE conversations SET updated_at=? WHERE id=?",
-                    (datetime.utcnow().isoformat(), conv_id),
+                    (datetime.now(timezone.utc).isoformat(), conv_id),
                 )
                 await db.commit()
 

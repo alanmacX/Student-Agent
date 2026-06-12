@@ -36,7 +36,7 @@ async def list_sessions():
 async def create_session(request: Request):
     body = await request.json()
     title = body.get("title", "新对话").strip() or "新对话"
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     session_id = str(uuid.uuid4())
     async with db_conn() as db:
         await db.execute(
@@ -53,7 +53,7 @@ async def rename_session(session_id: str, request: Request):
     title = body.get("title", "").strip()
     if not title:
         return {"error": "title required"}
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     async with db_conn() as db:
         await db.execute(
             "UPDATE schedule_sessions SET title=?, updated_at=? WHERE id=?",
@@ -252,7 +252,7 @@ async def confirm_pending(request: Request):
     # Persist as an assistant message so it survives the post-confirm reload.
     try:
         async with db_conn() as db:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             await _ensure_session_exists(db, session_id, now)
             pos_row = await (await db.execute(
                 "SELECT MAX(position) FROM schedule_messages WHERE session_id=?", (session_id,)
@@ -278,7 +278,7 @@ async def stream_schedule_chat(request: Request):
         return {"error": "empty message"}
 
     async with db_conn() as db:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         # Ensure session row exists
         await _ensure_session_exists(db, session_id, now)
@@ -332,7 +332,7 @@ async def stream_schedule_chat(request: Request):
                 payload_json = json.dumps(payload) if payload else None
                 await db.execute(
                     "INSERT INTO schedule_messages (id, session_id, role, content, schedule_payload_json, timestamp, position) VALUES (?,?,?,?,?,?,?)",
-                    (str(uuid.uuid4()), session_id, "assistant", text, payload_json, datetime.utcnow().isoformat(), next_pos),
+                    (str(uuid.uuid4()), session_id, "assistant", text, payload_json, datetime.now(timezone.utc).isoformat(), next_pos),
                 )
                 await db.commit()
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -360,7 +360,7 @@ async def stream_schedule_chat(request: Request):
             async with db_conn() as db:
                 await db.execute(
                     "INSERT INTO schedule_messages (id, session_id, role, content, timestamp, position) VALUES (?,?,?,?,?,?)",
-                    (str(uuid.uuid4()), session_id, "assistant", text, datetime.utcnow().isoformat(), next_pos),
+                    (str(uuid.uuid4()), session_id, "assistant", text, datetime.now(timezone.utc).isoformat(), next_pos),
                 )
                 await db.commit()
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -451,7 +451,7 @@ async def stream_schedule_chat(request: Request):
                 usage_json = json.dumps(usage_data) if usage_data else None
                 await db.execute(
                     "INSERT INTO schedule_messages (id, session_id, role, content, usage_json, schedule_payload_json, timestamp, position) VALUES (?,?,?,?,?,?,?,?)",
-                    (str(uuid.uuid4()), session_id, "assistant", full_response, usage_json, payload_json, datetime.utcnow().isoformat(), next_pos),
+                    (str(uuid.uuid4()), session_id, "assistant", full_response, usage_json, payload_json, datetime.now(timezone.utc).isoformat(), next_pos),
                 )
                 await db.commit()
 

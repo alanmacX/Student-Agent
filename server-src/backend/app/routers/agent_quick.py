@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 
@@ -93,7 +93,7 @@ async def _save_msg(db, session_id: str, role: str, content: str):
     next_pos = (pos_row[0] or 0) + 1
     await db.execute(
         "INSERT INTO schedule_messages (id, session_id, role, content, timestamp, position) VALUES (?,?,?,?,?,?)",
-        (str(uuid.uuid4()), session_id, role, content, datetime.utcnow().isoformat(), next_pos),
+        (str(uuid.uuid4()), session_id, role, content, datetime.now(timezone.utc).isoformat(), next_pos),
     )
 
 
@@ -115,7 +115,7 @@ async def agent_ask(request: Request):
             "SELECT 1 FROM schedule_sessions WHERE id=?", (session_id,)
         )).fetchone()
         if not exists:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             await db.execute(
                 "INSERT INTO schedule_sessions (id, title, created_at, updated_at) VALUES (?,?,?,?)",
                 (session_id, "Siri", now, now),
@@ -155,7 +155,7 @@ async def agent_ask(request: Request):
     async with db_conn() as db:
         await _save_msg(db, session_id, "assistant", reply)
         await db.execute("UPDATE schedule_sessions SET updated_at=? WHERE id=?",
-                         (datetime.utcnow().isoformat(), session_id))
+                         (datetime.now(timezone.utc).isoformat(), session_id))
         await db.commit()
 
     return {"ok": True, "reply": reply, "did": did, "session": session_id}

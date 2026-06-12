@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from app.models import ConversationCreate, ConversationUpdate
 from app.database import db_conn
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -22,7 +22,7 @@ async def list_conversations():
 @router.post("")
 async def create_conversation(body: ConversationCreate):
     async with db_conn() as db:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         conv_id = str(uuid.uuid4())
         await db.execute(
             "INSERT INTO conversations (id, title, provider_id, model, created_at, updated_at) VALUES (?,?,?,?,?,?)",
@@ -55,7 +55,7 @@ async def update_conversation(conv_id: str, body: ConversationUpdate):
         if not updates:
             return {"ok": True}
         updates.append("updated_at=?")
-        params.append(datetime.utcnow().isoformat())
+        params.append(datetime.now(timezone.utc).isoformat())
         params.append(conv_id)
         await db.execute(f"UPDATE conversations SET {','.join(updates)} WHERE id=?", params)
         await db.commit()
