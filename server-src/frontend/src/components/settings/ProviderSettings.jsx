@@ -36,6 +36,8 @@ export default function ProviderSettings() {
   const [saving, setSaving] = useState(false);
   const [reachability, setReachability] = useState({});
   const [scheduleProviderId, setScheduleProviderId] = useState("xiaomimimo");
+  const [lightProviderId, setLightProviderId] = useState("xiaomimimo");
+  const [lightModel, setLightModel] = useState("");
   const [filterProviderId, setFilterProviderId] = useState("xiaomimimo");
   const [filterModel, setFilterModel] = useState("");
 
@@ -52,8 +54,11 @@ export default function ProviderSettings() {
   useEffect(() => {
     reload();
     apiFetch("/api/settings").then((s) => {
-      setScheduleProviderId(s.schedule_agent_provider_id || "xiaomimimo");
-      setFilterProviderId(s.filter_provider || s.schedule_agent_provider_id || "xiaomimimo");
+      const scheduleDefault = s.schedule_agent_provider_id || "xiaomimimo";
+      setScheduleProviderId(scheduleDefault);
+      setLightProviderId(s.light_agent_provider_id || scheduleDefault);
+      setLightModel(s.light_agent_model || "");
+      setFilterProviderId(s.filter_provider || scheduleDefault);
       setFilterModel(s.filter_model || "");
     }).catch(() => {});
   }, [reload]);
@@ -120,6 +125,21 @@ export default function ProviderSettings() {
     await apiFetch("/api/settings", {
       method: "PUT",
       body: JSON.stringify({ settings: { schedule_agent_provider_id: id } }),
+    });
+  };
+
+  const saveLightProvider = async (id) => {
+    setLightProviderId(id);
+    await apiFetch("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ settings: { light_agent_provider_id: id } }),
+    });
+  };
+
+  const saveLightModel = async () => {
+    await apiFetch("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ settings: { light_agent_model: lightModel.trim() } }),
     });
   };
 
@@ -246,6 +266,39 @@ export default function ProviderSettings() {
         <p className="text-xs text-[var(--text-tertiary)]">
           日程 Agent 使用这个 Provider 处理对话。
         </p>
+      </div>
+
+      <div className="ui-card p-5 space-y-3">
+        <div>
+          <p className="text-sm font-semibold text-white">Light Router / Briefing Agent</p>
+          <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+            用于工具清单选择和首页轻量 briefing；建议选快且便宜的模型，留空则用 Provider 默认模型。
+          </p>
+        </div>
+        <select
+          value={lightProviderId}
+          onChange={(e) => saveLightProvider(e.target.value)}
+          className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none"
+        >
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        <div className="flex gap-2">
+          <input
+            value={lightModel}
+            onChange={(e) => setLightModel(e.target.value)}
+            onBlur={saveLightModel}
+            placeholder="例如 gpt-4o-mini / qwen-flash；留空用默认"
+            className="min-h-10 min-w-0 flex-1 rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white placeholder-[var(--text-tertiary)] focus:outline-none"
+          />
+          <button
+            onClick={saveLightModel}
+            className="rounded-2xl border border-[var(--border)] px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--hover-bg)]"
+          >
+            保存
+          </button>
+        </div>
       </div>
 
       <div className="ui-card p-5 space-y-3">

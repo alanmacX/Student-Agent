@@ -1,531 +1,189 @@
-# Student-Agent
+# Student-Agent v2
 
-一个面向大学生的智能助手系统。集成学习通（Chaoxing）、钉钉（DingTalk）消息监控，配备 29 个工具的 LLM 日程代理、后台自主决策引擎、以及基于 PWA 的 Web Push 推送通知。
+一个自托管的学生个人 AI 日程管家。它同步学习通、钉钉、本地日程和提醒，把高价值信息沉淀到统一数据库，并通过一个按需查询的 Schedule Agent 帮你调查、整理和执行任务。
 
----
+v2 的核心变化：不再把 48 小时上下文硬塞进 prompt，也不再用硬编码 intent 决定工具。现在是 **light router 先选工具，主 agent 再按需只读查询数据库**；dashboard 也从独立 briefing 服务改成基于数据库 hash 的轻量刷新。
 
-## 目录
+![Student-Agent v2 architecture](docs/architecture-v2.svg)
 
-- [快速部署](#快速部署)
-- [启用 Push 通知（PWA）](#启用-push-通知pwa)
-- [架构总览](#架构总览)
-- [系统架构图](#系统架构图)
-- [核心设计优势](#核心设计优势)
-- [后端模块详解](#后端模块详解)
-- [前端结构](#前端结构)
-- [环境变量](#环境变量)
-- [日常运维](#日常运维)
+## 当前架构
 
----
+前端是 React + Vite PWA，后端是 FastAPI + SQLite + APScheduler，部署层是 Docker Compose + Nginx。
+
+Agent 链路分成两层：
+
+- **Light Router / Briefing Agent**：便宜、快，只负责两件事：给当前 query 选择最小工具清单；在 dashboard 数据 hash 变化时生成一句 briefing 和最多 5 个行动项。
+- **Detailed Schedule Agent**：负责真实回答和执行。它拿到 light router 给的工具清单后，通过工具主动拉取证据，不再依赖预注入的大块 context。
+
+这里不是“两个数据库工具模式”。真正的工具面是：
+
+- `get_current_time`：返回 Asia/Shanghai 与 UTC 的当前时间、今天、本周窗口。
+- `get_data_schema`：告诉 agent 哪些表能查、时间字段怎么用、importance/tier 怎么理解。
+- `search_database`：只读 SQL 查询。只允许 `SELECT` 和 `PRAGMA table_info`，只允许业务白名单表，屏蔽 token/cookie/key 等敏感字段。
+- `get_record_detail`：对某条白名单记录拉更完整字段。
+- 领域工具：课程、提醒、日历、学习通、消息、知识库、推送等。写操作仍走确认门，不会让 agent 自由写 SQL。
+
+`search_database` 自带 `detail_level=brief|detailed`，它只控制返回字段截断长度；不是另一个 agent 模式。常规回答用 `brief`，需要核对原文或追问细节时再拉 `detailed`。
+
+## 数据获取策略
+
+旧版：
+
+```text
+server 预查 48h 数据 -> 拼进 build_turn_context() -> agent 被动读取
+硬编码关键词 intent -> 固定工具清单
+dashboard_briefing 服务 -> 独立生成首页文案
+```
+
+v2：
+
+```text
+用户 query -> light router 选工具 -> detailed agent 按需调用只读查询工具
+dashboard /today -> SQL payload builder -> hash 变化才触发 light briefing
+时间输入 -> Asia/Shanghai 解析 -> UTC ISO 存储和比较
+```
+
+这个改法保留现有数据库结构、importance、hierarchy_tier 和业务工具，只改变数据进入 agent 的方式：从“推”变成“拉”。
+
+## Token 策略
+
+v2 的省 token 点：
+
+- 去掉每轮 `build_turn_context()` 的 48h 全量注入。
+- 聊天历史窗口从 40 条缩到 12 条，长期事实必须由数据库工具拉取。
+- light router 只输出 JSON 工具名，模型可在 Settings 单独选更便宜的。
+- dashboard briefing 只在内容 hash 变化时刷新，普通打开首页不跑 LLM。
+- tool result 默认 brief 截断，细节只在必要时二次查询。
+- router、dashboard briefing、agent loop 都写入 token 预算表，账不会漏。
+
+可重复跑 token 对比：
+
+```bash
+cd server-src
+ACCESS_TOKEN=xxx BASE_URL=https://your-domain \
+  python3 scripts/token_compare.py --label v2 --out /tmp/v2-tokens.json
+```
+
+如果有旧版结果：
+
+```bash
+python3 scripts/token_compare.py \
+  --base-url https://your-domain \
+  --token xxx \
+  --baseline-json /tmp/baseline-tokens.json \
+  --label v2
+```
+
+## 时间口径
+
+统一规则：
+
+- 用户无时区输入按 `Asia/Shanghai` 解释。
+- 数据库存储和 SQL 比较统一用 UTC ISO，例如 `2026-06-12T10:30:00+00:00`。
+- dashboard、agent schema、查询工具都暴露本地日/周窗口对应的 UTC 边界。
+- 钉钉毫秒 epoch 会在查询说明中标注，避免和 ISO 字符串混用。
+
+核心实现位于 `server-src/backend/app/services/time_utils.py`。
+
+## Prompt 清单
+
+当前需要维护的 prompt 有四类：
+
+- `schedule_agent.STATIC_SYSTEM_PROMPT`：主 agent 行为约束。现在保持短 prompt，要求事实来自工具结果，不再塞业务上下文。
+- `tool_router.select_tools_for_query()`：light router，只输出工具名 JSON。这里要避免写“回答用户”类指令。
+- `dashboard_v2._briefing_system_prompt()`：首页轻 briefing，只基于输入 JSON 输出结构化摘要。
+- 同步/过滤类 prompt：学习通 memory 提炼、钉钉过滤、standby push 决策。它们仍是各自模块的局部 prompt，不参与 schedule chat 的 context 注入。
+
+Prompt 维护原则：主 agent 要少背规则，多看证据；router 要少选工具；dashboard briefing 要短、可缓存、可失败回退。
 
 ## 快速部署
 
-### 前置条件
+服务器要求：
 
-- Linux 服务器（推荐 Ubuntu 22.04+ / Debian 12+）
+- Linux，推荐 Ubuntu 22.04+ 或 Debian 12+
 - Docker + Docker Compose v2
-- 一个 LLM API Key（支持 OpenAI / Anthropic / Gemini / MiMo 或任何 OpenAI 兼容 API）
+- 一个 OpenAI 兼容或内置支持的 LLM Provider
 
-> 不需要 Node.js 或 Python — 预构建镜像从 GitHub Container Registry (ghcr.io) 直接拉取。
-
-### 一键安装
+安装：
 
 ```bash
-git clone https://github.com/alanmacX/Student-Agent.git
-cd Student-Agent/server-src
-chmod +x install.sh
-./install.sh
+git clone https://github.com/alanmacX/Student-Agent.git /opt/chatbot
+cd /opt/chatbot/server-src
+bash install.sh
 ```
 
-安装脚本会自动完成：
-
-1. 检测 Docker 环境，配置国内镜像加速
-2. 交互式创建 `.env` 配置文件（LLM 提供商、模型选择）
-3. 可选生成 VAPID 密钥对（用于 Web Push 通知）
-4. **从 ghcr.io 拉取预构建镜像**（约 30 秒，无需本地构建）
-5. 可选安装钉钉桌面客户端 + Xvfb 虚拟显示（`--no-dingtalk` 跳过，钉钉安装包从 GitHub Releases 下载）
-6. 启动容器，等待健康检查通过
-
-安装完成后输出访问地址，后续在浏览器中打开即可使用。
-
-### 手动部署
+升级：
 
 ```bash
-# 1. 复制并编辑配置
-cp .env.example .env
-vim .env
-
-# 2. 拉取预构建镜像并启动（首次约 30 秒）
-docker compose pull --ignore-buildable
-docker compose up -d
-
-# 3. 验证
-curl http://localhost/health
-# => {"status":"ok","chaoxing_logged_in":false}
+cd /opt/chatbot
+bash server-src/upgrade.sh
 ```
 
-如果 ghcr.io 不可达（如国内无代理），`docker compose up -d` 会自动从源码构建（需要 2-5 分钟）。
+`upgrade.sh` 会自动切到 `server-src`，默认从当前源码构建 backend/frontend，启动容器，并检查：
 
-### 升级
+- `GET /health`
+- `GET /api/dashboard/today`
+
+常用参数：
+
+- `--skip-pull`：不拉 git。
+- `--skip-build`：不重建镜像，只重启。
+- `--pull-images`：优先拉 ghcr 预构建镜像。
+- `--no-healthcheck`：跳过部署后健康检查。
+
+## 设置
+
+进入 Settings 后至少确认：
+
+- **Schedule Agent Provider**：主 agent 模型，负责复杂推理和工具调用。
+- **Light Router / Briefing Agent**：工具路由和 dashboard briefing 模型，建议选便宜快速模型。
+- **Filter Provider**：消息过滤/提炼使用的模型。
+- **Token Budget**：每日预算；analytics 会汇总 chat、schedule、standby、router、dashboard briefing。
+
+## 本地验证
 
 ```bash
-chmod +x upgrade.sh
-./upgrade.sh
+# 后端语法检查
+python3 -m compileall server-src/backend/app
+
+# 前端构建
+cd server-src/frontend && npm run build
+
+# token 采样
+cd ../
+BASE_URL=http://localhost ACCESS_TOKEN=xxx python3 scripts/token_compare.py
 ```
 
-升级流程：拉取最新代码 → 从 ghcr.io 拉取新镜像 → 滚动重启。通常 30 秒内完成。
+## 目录
 
----
-
-## 启用 Push 通知（PWA）
-
-> **重要：必须通过 PWA 安装才能收到推送通知。** 直接在浏览器中访问网页无法接收后台推送。
-
-### 为什么是 PWA？
-
-Web Push Notification 是浏览器标准 API，但**只在 PWA（Progressive Web App）模式下才完整支持后台推送**。普通网页标签页在关闭后无法接收通知，而 PWA 安装到桌面后拥有独立的 Service Worker 生命周期，即使应用未打开也能收到推送。
-
-### 安装步骤
-
-1. 用 HTTPS 访问你的部署地址（PWA 要求安全上下文，localhost 除外）
-2. 浏览器会提示"添加到主屏幕"或显示安装图标：
-   - **iOS Safari**：分享按钮 → "添加到主屏幕"
-   - **Android Chrome**：地址栏右侧安装图标，或菜单 → "添加到主屏幕"
-   - **桌面 Chrome/Edge**：地址栏右侧安装图标
-3. 安装后从主屏幕/桌面打开应用
-4. 进入 **设置 → 推送通知**，点击"启用推送通知"
-5. 允许通知权限
-
-### 推送通知工作流
-
-```
-Standby Agent（每15分钟）
-    │
-    ├─ 读取：待办提醒、记忆条目、系统健康
-    ├─ 决策：LLM 判断是否需要推送
-    │
-    └─ 推送 ──→ Web Push API ──→ Service Worker ──→ 系统通知
-                                                    ├─ 点击 → 打开应用
-                                                    ├─ 关闭 → 回执上报
-                                                    └─ 投递 → 回执上报
+```text
+.
+├── docs/
+│   └── architecture-v2.svg
+├── server-src/
+│   ├── backend/
+│   │   └── app/
+│   │       ├── routers/
+│   │       ├── services/
+│   │       ├── memory/
+│   │       └── tasks/
+│   ├── frontend/
+│   ├── scripts/
+│   │   └── token_compare.py
+│   ├── docker-compose.yml
+│   ├── install.sh
+│   └── upgrade.sh
+└── README.md
 ```
 
-推送支持：
-- 高紧急振动模式 `[200, 100, 200]`
-- 作业类通知 `requireInteraction`（需用户手动关闭）
-- 投递/点击/关闭全链路追踪
-
----
-
-## 架构总览
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        用户设备（PWA）                            │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  React SPA (Vite)                                        │   │
-│  │  ├─ Schedule Agent 聊天（29 个工具）                       │   │
-│  │  ├─ Hub 仪表盘（提醒、记忆、便签）                         │   │
-│  │  ├─ Settings（提供商、推送、用量统计）                      │   │
-│  │  └─ Service Worker（Web Push 接收 + 离线缓存）             │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ HTTPS / SSE
-┌────────────────────────▼────────────────────────────────────────┐
-│                     Nginx 反向代理                                │
-│  /          → frontend:80   （静态资源）                          │
-│  /api/      → backend:8000  （REST API）                         │
-│  /api/chat  → backend:8000  （SSE 流式，禁用缓冲）                │
-└────────────────────────┬────────────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────────────┐
-│                 FastAPI 后端 (Python 3.12)                        │
-│                                                                  │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐      │
-│  │ Chat Agent   │  │ Schedule     │  │ Standby Agent      │      │
-│  │ (通用对话)    │  │ Agent        │  │ (后台决策引擎)       │      │
-│  │              │  │ (29个工具)    │  │ 每15分钟自主判断     │      │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬─────────────┘      │
-│         │                 │                  │                    │
-│  ┌──────▼─────────────────▼──────────────────▼─────────────┐     │
-│  │              Universal Memory Engine                      │     │
-│  │  process_message() → Intent Extract → Effect Execute     │     │
-│  └──────────────────────┬───────────────────────────────────┘     │
-│                         │                                        │
-│  ┌──────────────────────▼───────────────────────────────────┐     │
-│  │  SQLite (WAL mode)  ─  25+ 张表                          │     │
-│  │  reminders │ events │ courses │ memory │ notifications   │     │
-│  └──────────────────────────────────────────────────────────┘     │
-│                                                                  │
-│  ┌────────────────┐  ┌─────────────────┐  ┌─────────────────┐   │
-│  │ Chaoxing 同步   │  │ DingTalk 解密    │  │ LLM Provider    │   │
-│  │ (学习通 API)    │  │ + 三级过滤       │  │ Router          │   │
-│  │ 自适应轮询      │  │ AES-128-ECB     │  │ 多提供商支持     │   │
-│  └────────────────┘  └─────────────────┘  └─────────────────┘   │
-└──────────────────────────────────────────────────────────────────┘
-                         │
-          ┌──────────────┼──────────────┐
-          ▼              ▼              ▼
-   ┌────────────┐ ┌────────────┐ ┌────────────┐
-   │ 学习通 API  │ │ 钉钉桌面端  │ │ LLM API    │
-   │ (Chaoxing)  │ │ (Xvfb)     │ │ OpenAI/... │
-   └────────────┘ └────────────┘ └────────────┘
-```
-
----
-
-## 系统架构图
-
-### Agent 工具调用流程
-
-```
-用户消息: "帮我建一个明天下午3点的提醒"
-    │
-    ▼
-┌─────────────────────────────────────────────┐
-│  Intent Router（intent.py：同义词+评分）      │
-│  "提醒/待办" → 匹配 create_reminder 工具      │
-│  仅将相关工具传给 LLM（节省 token）           │
-└────────────────────┬────────────────────────┘
-                     ▼
-┌─────────────────────────────────────────────┐
-│  build_turn_context()                        │
-│  注入压缩上下文：                              │
-│  ├─ 未来48h 提醒/日程/课程                    │
-│  ├─ 高重要度记忆条目                          │
-│  ├─ 用户偏好（user_memory）                   │
-│  └─ 学习通登录状态                            │
-└────────────────────┬────────────────────────┘
-                     ▼
-┌─────────────────────────────────────────────┐
-│  LLM 推理 → 输出 tool_call                   │
-│  create_reminder({title: "...", due_at: ...})│
-└────────────────────┬────────────────────────┘
-                     ▼
-┌─────────────────────────────────────────────┐
-│  Confirmation Pattern（写操作确认）            │
-│  "确认创建这个提醒吗？" → 等待用户确认        │
-│  用户回复 "确认" → 执行写入                   │
-└────────────────────┬────────────────────────┘
-                     ▼
-               SQLite 写入成功
-```
-
-### Standby Agent 决策流程
-
-```
-┌──────────────────────────────────────────────┐
-│  APScheduler 每 15 分钟触发                    │
-└────────────────────┬─────────────────────────┘
-                     ▼
-┌──────────────────────────────────────────────┐
-│  Context Hash 计算                            │
-│  hash = MD5(MAX(updated_at) × 3表 + psutil)  │
-│  与上次 no_action 的 hash 比较                 │
-│  相同 → 跳过 LLM 调用（省 token）              │
-└────────────────────┬─────────────────────────┘
-                     ▼ (hash 不同)
-┌──────────────────────────────────────────────┐
-│  _build_context() 聚合数据源                   │
-│  ├─ 待办提醒（未完成、未过期）                  │
-│  ├─ 高重要度记忆（有 action_hint）              │
-│  ├─ 未送达通知                                 │
-│  ├─ 系统健康（CPU/RAM/Disk）                   │
-│  └─ 用户偏好                                   │
-└────────────────────┬─────────────────────────┘
-                     ▼
-┌──────────────────────────────────────────────┐
-│  LLM 决策（仅 2 个工具：push / no_action）     │
-│  决策标准：                                    │
-│  ├─ 截止时间 < 3h → 高紧急推送                 │
-│  ├─ 截止时间 < 24h 且未通知 → 普通推送          │
-│  ├─ 高重要度未处理消息 → 考虑推送               │
-│  ├─ 系统指标异常 → 高紧急推送                   │
-│  └─ 无事 → no_action                          │
-└────────────────────┬─────────────────────────┘
-                     ▼
-┌──────────────────────────────────────────────┐
-│  推送执行 → Web Push API → PWA Service Worker │
-│  记录到 standby_agent_log（决策+token+耗时）   │
-│  记录到 notification_log（去重）               │
-└──────────────────────────────────────────────┘
-```
-
-### Universal Memory Engine 管道
-
-```
-消息来源                    Universal Memory Engine
-─────────                  ─────────────────────────
-Chaoxing 消息  ──┐
-                 ├──→  NormalisedMessage  ──→  process_message()
-DingTalk 消息  ──┘          │
-                            ▼
-                    ┌───────────────┐
-                    │ 噪声过滤       │  "好的"/"谢谢"/"收到" → 跳过
-                    └───────┬───────┘
-                            ▼
-                    ┌───────────────┐
-                    │ 意图提取       │  1 次 LLM 调用 → IntentGraph
-                    │ (IntentGraph) │  每个 intent: type + entity + confidence
-                    └───────┬───────┘
-                            ▼
-                    ┌───────────────┐
-                    │ 并行子代理     │  asyncio.gather: 纯 SQL 验证
-                    │ (无 LLM)      │  实体存在性 + 时间冲突检测
-                    └───────┬───────┘
-                            ▼
-                    ┌───────────────┐
-                    │ 效果合并+去重  │  按 (type, entity_key) 去重
-                    │               │  多个 push_now 合并为单条通知
-                    └───────┬───────┘
-                            ▼
-                    ┌───────────────┐
-                    │ SQL 事务执行   │  upsert_memory / push_now
-                    │               │  schedule_push / archive
-                    └───────┬───────┘
-                            ▼
-                    memory_entries + notifications
-```
-
----
-
-## 核心设计优势
-
-### 1. Universal Memory Engine — 一个入口处理所有消息源
-
-传统做法是每接一个平台就写一套独立的消息处理逻辑。本系统用一个 `process_message()` 函数统一处理所有来源（学习通、钉钉、以及未来任何新平台），内部管道：
-
-- **单次 LLM 调用**提取意图（IntentGraph），其余全部是纯 SQL 操作
-- **置信度阈值 0.7** 过滤低质量意图
-- **模糊实体匹配**：CJK 二元组 + ASCII 子串生成 topic index，O(1) 查找
-- **五级记忆层次**：CRITICAL → ACTIONABLE → CONTEXT → REFERENCE → HISTORICAL，自动计算层级
-
-新增消息源只需写一个 `_normalise()` 适配函数，无需改动引擎核心。
-
-### 2. 意图路由 — 省 token 的工具过滤
-
-Schedule Agent 拥有 29 个工具，但每次调用不需要全部传给 LLM。路由集中在
-`app/services/intent.py`（单一权威）：同义词扩展 + 评分匹配，而非写死的精确关键词。
-
-```python
-# intent.py：同义词加性扩展（变体 → 规范词）
-SYNONYMS = {
-    "提醒": ["待办", "todo", "事项", "记一下"],
-    "刷新": ["扫描", "同步", "重新拉", "refresh"],
-    "系统": ["状态", "内存", "ram", "磁盘", "health"],
-}
-# 工具关键词引用规范词，按命中数评分；>0 入选，全不中才回退全集
-TOOL_KEYWORDS = {"create_reminder": ["创建", "提醒"], ...}
-```
-
-用户说"帮我建个提醒"或"同步一下学习通"，只有相关工具被传入 LLM，其余不占
-token。始终包含 `get_schedule_context` 作为基础上下文。同义词扩展让"同步""内存
-占用"等口语说法也能正确路由（旧的精确关键词会漏）。
-
-### 3. Context Hash 优化 — 无变化时跳过 LLM
-
-Standby Agent 每 15 分钟运行一次，但大多数时候没有新数据。通过计算三个表的 `MAX(updated_at)` + 系统指标的 MD5 哈希，与上次 `no_action` 记录的哈希比较：
-
-- **哈希相同** → 跳过整个 LLM 调用，记录为 `skipped_no_change`
-- **哈希不同** → 执行 LLM 决策
-
-这将空转时的 API 成本降为零。
-
-### 4. Confirmation Pattern — 写操作不可逆保护
-
-所有 create/update/delete 操作不会直接执行。流程：
-
-1. Agent 输出 tool_call → 系统存储 pending mutation 到数据库
-2. 向用户展示确认信息："确认创建这个提醒吗？"
-3. 用户回复含"确认"/"确定"/"ok"/"yes" → 执行
-4. 否则 → 丢弃
-
-防止 LLM 幻觉导致的数据误操作。
-
-### 5. 钉钉本地数据库解密 — 无需官方 API
-
-直接读取钉钉桌面客户端的本地 SQLite 数据库，通过 AES-128-ECB 解密（密钥来自 `libsync.so`），包括 WAL 帧的实时解密。配合三级过滤管道：
-
-| 阶段 | 方法 | 作用 |
-|------|------|------|
-| Stage 0 | 用户配置 | 白名单/黑名单会话 + 自定义关键词 |
-| Stage 1 | 正则匹配 | 确定性粗筛（CS 关键词、课程模式） |
-| Stage 2 | LLM 分类 | 人格感知分类器，输出 notify/interest/drop |
-
-分类后的消息自动流入 Universal Memory Engine，参与记忆提取和推送决策。
-
-### 6. 多 LLM 提供商支持
-
-- 内置提供商：小米 MiMo
-- 支持任何 OpenAI 兼容 API（通过 Settings → 提供商配置自定义）
-- Agent 层自动适配 OpenAI / Anthropic / Gemini 协议差异
-- Token 用量追踪 + OpenRouter 实时定价（24h 缓存）→ 精确成本统计
-
-### 7. SSE 流式响应
-
-Chat 和 Schedule Agent 的响应通过 Server-Sent Events 流式传输，nginx 配置了专用的 SSE 路由（禁用缓冲、300s 超时、chunked transfer），实现打字机效果的实时对话体验。
-
----
-
-## 后端模块详解
-
-### 目录结构
-
-```
-backend/app/
-├── main.py                    # FastAPI 入口，lifespan 管理
-├── config.py                  # pydantic-settings 配置
-├── database.py                # SQLite schema + 迁移
-├── models.py                  # Pydantic 数据模型
-│
-├── routers/                   # REST API 端点
-│   ├── analytics.py           # /api/analytics — 用量统计 + 定价管理
-│   ├── chaoxing.py            # /api/chaoxing — 学习通操作
-│   ├── chat.py                # /api/conversations — 聊天（SSE）
-│   ├── conversations.py       # /api/conversations — CRUD
-│   ├── data.py                # /api/data — 数据导入导出
-│   ├── providers.py           # /api/providers — LLM 提供商管理
-│   ├── push.py                # /api/push — Web Push 订阅
-│   ├── reminders.py           # /api/reminders — 提醒 CRUD
-│   ├── schedule.py            # /api/schedule — 日程代理（SSE）
-│   └── settings.py            # /api/settings — 应用设置
-│
-├── services/                  # 业务逻辑层
-│   ├── agent_service.py       # 通用 Agent 循环（tool call 执行）
-│   ├── api_service.py         # LLM API 客户端（OpenAI/Anthropic/Gemini）
-│   ├── schedule_agent.py      # Schedule Agent（29 个工具 + 意图路由）
-│   ├── intent.py              # 意图路由（同义词扩展 + 评分）
-│   ├── provider_registry.py   # 提供商注册 + 解析
-│   ├── pricing_service.py     # OpenRouter 定价获取（24h 缓存）
-│   ├── chaoxing_service.py    # 学习通 API 客户端
-│   ├── push_service.py        # Web Push 发送
-│   └── ...
-│
-├── tasks/                     # 后台定时任务
-│   ├── scheduler.py           # APScheduler 调度器
-│   ├── standby_agent.py       # Standby Agent（15分钟轮询）
-│   ├── chaoxing_sync.py       # 学习通同步（信号驱动自适应 45s–900s）
-│   ├── health_monitor.py      # 系统健康监控
-│   └── notification_sender.py # 定时通知发送
-│
-├── memory/                    # Universal Memory Engine
-│   ├── engine.py              # 核心管道（意图提取 → 效果执行）
-│   └── base.py                # MemoryRepository + 五级层次
-│
-├── dingtalk/                  # 钉钉集成
-│   ├── dingtalk_service.py    # AES 解密 + 数据库读取
-│   ├── filters.py             # 三级过滤管道
-│   ├── classifier.py          # LLM 分类器（人格感知）
-│   ├── task.py                # 定时同步调度
-│   ├── memory_provider.py     # 消息 → Memory Engine 适配
-│   ├── router.py              # /api/dingtalk 端点
-│   └── schema.py              # 钉钉相关表定义
-│
-└── chaoxing/                  # 学习通适配
-    └── memory_provider.py     # 消息 → Memory Engine 适配
-```
-
-### 数据库表一览（25+ 张表）
-
-| 分类 | 表名 | 用途 |
-|------|------|------|
-| 核心 | `settings` | 键值配置存储 |
-| 对话 | `conversations`, `messages` | 普通聊天 |
-| 对话 | `schedule_sessions`, `schedule_messages` | 日程代理对话 |
-| 日程 | `server_reminders`, `server_events`, `server_courses` | 提醒/日程/课程 |
-| 学习通 | `chaoxing_session`, `chaoxing_courses`, `chaoxing_assignments` | 学习通数据 |
-| 记忆 | `chaoxing_memory_entries` | 通用记忆存储（多源） |
-| 记忆 | `memory_topic_index` | O(1) 实体查找索引 |
-| 记忆 | `memory_sync_state` | 各源同步游标 |
-| 钉钉 | `dingtalk_messages`, `dingtalk_sync_state`, `dingtalk_filter_config` | 钉钉消息+配置 |
-| 推送 | `push_subscriptions`, `notification_log`, `scheduled_notifications` | 推送订阅+日志 |
-| Agent | `standby_agent_log`, `user_memory` | 决策日志+用户偏好 |
-| 计费 | `model_pricing` | 模型定价覆盖 |
-| 提供商 | `custom_providers` | 自定义 LLM 提供商 |
-
----
-
-## 前端结构
-
-```
-frontend/src/
-├── api/                       # API 客户端层
-│   ├── client.js              # 基础 HTTP 客户端（apiFetch / apiStream）
-│   ├── schedule.js, chat.js, chaoxing.js, ...
-│
-├── components/
-│   ├── chat/                  # 通用聊天界面
-│   │   ├── ChatView.jsx       # 主聊天视图
-│   │   ├── ChatInput.jsx      # 输入框 + 斜杠命令面板
-│   │   ├── commands.js        # /remind /note /status /clear
-│   │   └── MessageBubble.jsx  # 消息气泡 + 工具调用渲染
-│   │
-│   ├── schedule/              # 日程代理界面（最丰富的模块）
-│   │   ├── ScheduleView.jsx   # 日程代理聊天
-│   │   ├── ScheduleOverview.jsx # 概览卡片（今日摘要+待办）
-│   │   ├── StatusStrip.jsx    # 系统健康指示器
-│   │   ├── TokenSummary.jsx   # Token 用量摘要
-│   │   └── ImportModal.jsx    # 课表导入
-│   │
-│   ├── hub/                   # Hub 仪表盘
-│   │   └── HubView.jsx        # 提醒面板 + 便签
-│   │
-│   ├── settings/              # 设置面板
-│   │   ├── ProviderSettings.jsx   # LLM 提供商配置
-│   │   ├── DingTalkStatus.jsx     # 钉钉状态 + QR 登录
-│   │   ├── PushSettings.jsx       # 推送通知设置
-│   │   └── RemindersPanel.jsx     # 提醒管理
-│   │
-│   ├── notifications/         # 通知组件
-│   │   ├── NotificationCenter.jsx # 通知历史
-│   │   └── DailyPopup.jsx         # 每日摘要弹窗
-│   │
-│   └── layout/                # 布局组件
-│       ├── Sidebar.jsx        # 侧边栏导航
-│       └── TabBar.jsx         # 底部标签栏
-│
-├── hooks/                     # 自定义 Hooks
-├── stores/                    # Zustand 状态管理
-└── lib/                       # 工具函数
-```
-
----
-
-## 环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `DATABASE_PATH` | `/data/chatbot.db` | SQLite 数据库路径 |
-| `STANDBY_AGENT_PROVIDER` | `openai` | Standby Agent 的 LLM 提供商 |
-| `STANDBY_AGENT_MODEL` | `gpt-4o-mini` | Standby Agent 的模型 |
-| `VAPID_PRIVATE_KEY` | — | Web Push VAPID 私钥 |
-| `VAPID_PUBLIC_KEY` | — | Web Push VAPID 公钥 |
-| `VAPID_MAILTO` | `mailto:admin@example.com` | VAPID 联系邮箱 |
-| `DINGTALK_AES_KEY` | `9f6ac1b97a9021bd` | 钉钉数据库解密密钥 |
-| `DINGTALK_SELF_UID` | — | 你自己的钉钉 UID |
-| `CHAOXING_SYNC_INTERVAL` | `300` | （已弃用）同步节奏现由信号驱动自适应决定，硬上界 900s |
-| `DEBUG` | `false` | 调试模式 |
-
----
-
-## 日常运维
+## 运维排查
 
 ```bash
-# 查看容器状态
+cd /opt/chatbot/server-src
 docker compose ps
-
-# 查看后端日志
-docker compose logs -f backend
-
-# 重启单个服务
-docker compose restart backend
-
-# 进入后端容器调试
-docker compose exec backend python -c "from app.database import *; ..."
-
-# 数据库备份
-docker compose exec backend cp /data/chatbot.db /data/chatbot.db.bak
-
-# 钉钉状态（如已启用）
-ssh your-server "systemctl status dingtalk dingtalk-xvfb dingtalk-qr"
+docker compose logs --tail=160 backend
+curl -fsS http://localhost/health
+curl -fsS -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost/api/dashboard/today
 ```
+
+如果 agent 回答短视，优先检查该轮 SSE 里是否出现了 `search_database` / `get_data_schema` 工具调用；如果没有，先看 light router 输出和 fallback 工具清单。

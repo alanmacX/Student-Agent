@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="760" viewBox="0 0 1240 760" role="img" aria-labelledby="title desc">
+  <title id="title">Student-Agent v2 architecture</title>
+  <desc id="desc">A pull-based agent architecture with a light router, detailed agent, read-only database tools, cached dashboard briefing, and unified time normalization.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#0b1020"/>
+      <stop offset="52%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#12251f"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" x2="1">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" x2="1">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#a3e635"/>
+    </linearGradient>
+    <linearGradient id="pink" x1="0" x2="1">
+      <stop offset="0%" stop-color="#fb7185"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#94a3b8"/>
+    </marker>
+    <style>
+      .title { font: 700 34px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #f8fafc; letter-spacing: 0; }
+      .subtitle { font: 500 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #cbd5e1; letter-spacing: 0; }
+      .label { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #f8fafc; letter-spacing: 0; }
+      .body { font: 500 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #cbd5e1; letter-spacing: 0; }
+      .tiny { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #94a3b8; letter-spacing: 0; }
+      .pill { font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; letter-spacing: 0; }
+      .card { fill: rgba(15, 23, 42, 0.82); stroke: rgba(148, 163, 184, 0.25); stroke-width: 1.2; filter: url(#shadow); }
+      .soft { fill: rgba(255,255,255,0.055); stroke: rgba(255,255,255,0.12); stroke-width: 1; }
+      .line { stroke: #94a3b8; stroke-width: 2.2; fill: none; marker-end: url(#arrow); opacity: 0.78; }
+      .dash { stroke: #94a3b8; stroke-width: 2; fill: none; marker-end: url(#arrow); stroke-dasharray: 7 8; opacity: 0.62; }
+    </style>
+  </defs>
+
+  <rect width="1240" height="760" rx="34" fill="url(#bg)"/>
+  <circle cx="1040" cy="92" r="190" fill="#22c55e" opacity="0.08"/>
+  <circle cx="140" cy="680" r="220" fill="#38bdf8" opacity="0.08"/>
+
+  <text x="64" y="70" class="title">Student-Agent v2</text>
+  <text x="64" y="102" class="subtitle">Pull-based context, read-only investigation, cached dashboard briefing, unified UTC storage.</text>
+
+  <rect x="64" y="145" width="250" height="156" rx="20" class="card"/>
+  <text x="92" y="186" class="label">Clients</text>
+  <text x="92" y="218" class="body">Desktop / Mobile PWA</text>
+  <text x="92" y="246" class="body">Schedule chat</text>
+  <text x="92" y="274" class="body">Dashboard / Settings</text>
+  <rect x="92" y="312" width="154" height="28" rx="14" fill="url(#blue)"/>
+  <text x="112" y="331" class="pill">SSE + REST</text>
+
+  <rect x="404" y="124" width="340" height="206" rx="24" class="card"/>
+  <text x="432" y="166" class="label">Light Router</text>
+  <text x="432" y="198" class="body">Input: user query + available tools</text>
+  <text x="432" y="226" class="body">Output: minimal tool list JSON</text>
+  <text x="432" y="254" class="body">Also powers dashboard briefing</text>
+  <rect x="432" y="280" width="116" height="28" rx="14" fill="url(#green)"/>
+  <text x="452" y="299" class="pill">cheap model</text>
+  <rect x="560" y="280" width="142" height="28" rx="14" fill="#e2e8f0"/>
+  <text x="580" y="299" class="pill">settings-driven</text>
+
+  <rect x="832" y="124" width="344" height="206" rx="24" class="card"/>
+  <text x="860" y="166" class="label">Detailed Agent</text>
+  <text x="860" y="198" class="body">No 48h prompt dump</text>
+  <text x="860" y="226" class="body">Asks tools for facts on demand</text>
+  <text x="860" y="254" class="body">Writes still require confirmation</text>
+  <rect x="860" y="280" width="124" height="28" rx="14" fill="url(#pink)"/>
+  <text x="880" y="299" class="pill">main model</text>
+  <rect x="996" y="280" width="140" height="28" rx="14" fill="#e2e8f0"/>
+  <text x="1017" y="299" class="pill">evidence first</text>
+
+  <path d="M314 224 C344 224 364 224 394 224" class="line"/>
+  <path d="M744 224 C774 224 794 224 824 224" class="line"/>
+
+  <rect x="92" y="410" width="264" height="184" rx="22" class="card"/>
+  <text x="120" y="450" class="label">Dashboard v2</text>
+  <text x="120" y="482" class="body">SQL payload builder</text>
+  <text x="120" y="510" class="body">Content hash cache</text>
+  <text x="120" y="538" class="body">Async light briefing refresh</text>
+  <rect x="120" y="564" width="158" height="28" rx="14" fill="url(#green)"/>
+  <text x="140" y="583" class="pill">refresh on change</text>
+
+  <rect x="442" y="414" width="354" height="190" rx="22" class="card"/>
+  <text x="470" y="454" class="label">Read-Only Data Tools</text>
+  <rect x="470" y="482" width="294" height="32" rx="16" class="soft"/>
+  <text x="490" y="503" class="body">search_database(sql, params, limit)</text>
+  <rect x="470" y="524" width="294" height="32" rx="16" class="soft"/>
+  <text x="490" y="545" class="body">get_record_detail(source, id)</text>
+  <rect x="470" y="566" width="294" height="32" rx="16" class="soft"/>
+  <text x="490" y="587" class="body">get_data_schema + get_current_time</text>
+
+  <rect x="882" y="414" width="294" height="190" rx="22" class="card"/>
+  <text x="910" y="454" class="label">SQLite Domain Store</text>
+  <text x="910" y="486" class="body">courses / events / reminders</text>
+  <text x="910" y="514" class="body">memory / assignments / messages</text>
+  <text x="910" y="542" class="body">audit / budget / notifications</text>
+  <rect x="910" y="568" width="166" height="28" rx="14" fill="url(#blue)"/>
+  <text x="930" y="587" class="pill">UTC ISO in DB</text>
+
+  <path d="M1004 330 C1004 374 1004 380 1004 406" class="line"/>
+  <path d="M832 500 C820 500 812 500 802 500" class="line"/>
+  <path d="M442 500 C402 500 386 500 362 500" class="dash"/>
+  <path d="M619 414 C619 382 619 364 619 338" class="dash"/>
+  <path d="M772 414 C810 374 836 350 870 318" class="dash"/>
+
+  <rect x="64" y="652" width="1112" height="54" rx="18" fill="rgba(15,23,42,0.55)" stroke="rgba(148,163,184,0.20)"/>
+  <text x="92" y="686" class="tiny">v2 invariant: the server gives agents tools, not a pre-baked context blob. Data access is pull-based, auditable, bounded, and read-only unless an explicit confirmation-gated domain tool is selected.</text>
+</svg>

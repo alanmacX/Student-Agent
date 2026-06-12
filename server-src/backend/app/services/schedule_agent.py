@@ -12,21 +12,17 @@ from typing import AsyncGenerator
 import zoneinfo
 import aiosqlite
 
-STATIC_SYSTEM_PROMPT = """你是 ChatBot 的日程 Agent，主要管理 Reminders（提醒事项）和日历事件（Calendar），也能读取课程表、学习通作业和学习通消息，以及钉钉群聊/私聊消息。
-你可以读取、创建、更新、完成、删除提醒事项，也可以读取、创建、更新、删除日历事件；可以读取学习通作业、学习通 memory，并在 memory 不足时触发 refresh_message_memory。如果你认为某条 memory 不重要或用户明确要求删除，可以使用 delete_message_memory 工具将其删除。只有在用户明确要求修改、完成或删除时才执行写操作。
-课程表是 App 内本地导入的数据，不属于系统 Calendar；需要了解上课时间时使用 list_courses。不要为了导入、查看或规划课程表而创建 Calendar 事件。
-当用户用自然语言描述课程表（课程名、星期几、第几节、第几周、教室）并希望录入时，使用 import_timetable 工具按周次展开写入本地课程表。先把解析出的课程清单和学期开始日（第 1 周周一）用一句话向用户复述并等待确认，确认后再调用。缺少星期、节次或学期开始日时要主动追问。
-不要因为"考试、期中、作业截止、会议、活动、通知"自动查询课程表；只有用户明确提到具体课程名、课程表、上课安排、调课、停课、补课或换教室时，才读取课程表。
-需要操作具体提醒事项或日历事件时，先通过工具查到 ID。
-工具结果默认只给你阅读。只有用户明确要看列表，才在工具参数里设置 show_in_ui=true。
-【铁律·禁止幻觉】你绝对不能在没有真正调用对应工具并收到成功结果的情况下，声称已经完成任何写操作——包括创建/更新/完成/删除提醒或日历、保存或删除记忆、发送推送、设置或取消定时通知、录入课程表。
-- 当用户说"记住/帮我记/备忘/记下"某件事时，必须调用 save_memory 工具；只有工具返回 ok 后才能回复"已记住"。没调用工具就绝不要说已保存。
-- 不确定是否已落库时，宁可再调用一次 list_memories / 对应的 list 工具核实，也不要凭印象声称成功。
-- 你只能基于工具的真实返回结果向用户汇报，不允许编造 ID、时间或"已完成"的状态。
-- 【汇总禁止杜撰】当你汇总"未来事项/待办/截止/今天有什么课"时，**只能逐字引用上方 context 或工具结果里真实存在的条目**。严禁凭空捏造任何作业名、任务名、课程、截止日期或时间（例如不要无中生有出"数据提交 明天16:59截止"这种条目）。如果某来源没有数据，就如实说"没有"，绝不编一条来凑。宁可少说、说"暂无"，也不要假阳性。
-确认机制：当一个写操作被加入待确认队列后，前端会自动显示「确认执行 / 取消」按钮。不要再用文字向用户询问「要不要确认 / 是否取消」——按钮负责确认，你只用一句话说明将要执行的内容即可。
-最终回复使用中文，默认只写一句简洁摘要；不要重复完整列表、不要寒暄或多余解释。
-当需要展示结构化信息（多条作业、课程安排、对比等）时，可以输出**紧凑的内联 HTML** 让界面更美观：用 <div>/<span> 配合 class 或 style 做小卡片、用颜色标注紧急度（例如 style="color:#f87171" 表示临期）。务必紧凑，不要长篇大论，不要用 ``` 代码块包裹 HTML。"""
+STATIC_SYSTEM_PROMPT = """你是 ChatBot 的日程 Agent，负责提醒、日历、课程表、学习通/钉钉消息、推送与用户记忆。
+
+核心规则：
+- 事实回答必须来自工具结果；没有查到就说没查到，不要凭预设 context 或记忆猜。
+- 复杂、跨表、调查类问题优先用 search_database；不确定字段时先用 get_data_schema。
+- 查询默认 brief；用户追问细节、需要核对来源或执行写操作前，再用 get_record_detail。
+- 课程表属于本地课程数据，不是 Calendar。查课用 list_courses/search_database，不要把课程误建为日历事件。
+- 写操作只有用户明确要求时才调用；被加入确认队列后，前端按钮负责确认，你只需简短说明将执行什么。
+- 任何创建/更新/完成/删除/保存/推送/导入，必须以工具成功结果为准，不能凭空声称已完成。
+- 时间必须带时区；用户没给时区时按 Asia/Shanghai 解析。
+- 最终回复使用中文，简洁但要保留关键证据。不要输出内联 HTML，结构化展示交给前端 payload。"""
 
 BARE_COMPLETION = {"完成", "done", "ok", "好的", "已完成"}
 
@@ -48,12 +44,9 @@ async def run_schedule_agent(
     now = datetime.now(zoneinfo.ZoneInfo("Asia/Shanghai"))
     custom_prompt = await _get_setting(db_path, "schedule_agent_prompt")
     system_prompt = custom_prompt or STATIC_SYSTEM_PROMPT
-    plan = orchestrator_plan(user_message)
     dynamic_context = build_dynamic_context(now)
-    turn_context = await build_turn_context(db_path, chaoxing_svc, now, user_message=user_message)
-    reports = await collect_reports(plan, db_path, chaoxing_svc, now)
 
-    merged_system = f"{dynamic_context}\n\n{system_prompt}\n\n{turn_context}"
+    merged_system = f"{dynamic_context}\n\n{system_prompt}"
     if extra_system:
         merged_system = f"{merged_system}\n\n{extra_system}"
 
@@ -62,13 +55,23 @@ async def run_schedule_agent(
     for m in trimmed_history:
         messages.append(AgentMsg(role=m["role"], content=m["content"]))
     if not trimmed_history or trimmed_history[-1].get("role") != "user" or trimmed_history[-1].get("content") != user_message:
-        messages.append(AgentMsg(role="user", content=f"{reports}\n\n用户消息：{user_message}"))
-    elif messages[-1].role == "user":
-        messages[-1].content = f"{reports}\n\n用户消息：{messages[-1].content}"
+        messages.append(AgentMsg(role="user", content=user_message))
 
     all_tools = _build_schedule_tools()
-    tools = _filter_schedule_tools(all_tools, user_message)
-    print(f"[SCHEDULE] tools filtered: {len(tools)}/{len(all_tools)} for msg={user_message[:40]!r}", flush=True)
+    from .tool_router import select_tools_for_query
+
+    selected_names, router_usage = await select_tools_for_query(
+        user_message, history, all_tools, provider, model, api_key
+    )
+    if router_usage:
+        yield {"type": "usage", "usage": router_usage}
+    selected = set(selected_names)
+    tools = [tool for tool in all_tools if tool.name in selected]
+    print(
+        f"[SCHEDULE] tools selected: {len(tools)}/{len(all_tools)} "
+        f"{[t.name for t in tools]} for msg={user_message[:40]!r}",
+        flush=True,
+    )
 
     # Payload collector: gather structured data from tool results
     payload_collector: dict = {
@@ -90,7 +93,7 @@ async def run_schedule_agent(
         "create_calendar_event", "update_calendar_event", "delete_calendar_event",
         "schedule_notification", "cancel_scheduled_notification",
         "send_push_notification", "set_push_config", "trigger_memory_scan",
-        "import_timetable", "db_execute",
+        "import_timetable",
     }
 
     async def execute_tool(tc):
@@ -193,158 +196,46 @@ def build_dynamic_context(now: datetime | None = None) -> str:
 _build_dynamic_context = build_dynamic_context
 
 
-async def build_turn_context(db_path, chaoxing_svc, now, window_hours=48, user_message: str = "") -> str:
-    end = now + timedelta(hours=window_hours)
-    rows = {}
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-        rows["reminders"] = await (await db.execute("""
-            SELECT id, title, due_at, is_important FROM server_reminders
-            WHERE is_completed=0 AND due_at IS NOT NULL AND due_at >= ? AND due_at <= ?
-            ORDER BY due_at ASC LIMIT 16
-        """, (now.isoformat(), end.isoformat()))).fetchall()
-        rows["events"] = await (await db.execute("""
-            SELECT id, title, start_at, end_at FROM server_events
-            WHERE end_at >= ? AND start_at <= ?
-            ORDER BY start_at ASC LIMIT 16
-        """, (now.isoformat(), end.isoformat()))).fetchall()
-        rows["courses"] = await (await db.execute("""
-            SELECT title, start_at, end_at, location FROM server_courses
-            WHERE end_at >= ? AND start_at <= ?
-            ORDER BY start_at ASC LIMIT 16
-        """, (now.isoformat(), end.isoformat()))).fetchall()
-        rows["memory"] = await (await db.execute("""
-            SELECT title, action_hint, importance FROM chaoxing_memory_entries
-            WHERE archived_at IS NULL AND importance IN ('high','medium')
-            AND (expires_at IS NULL OR expires_at > ?)
-            ORDER BY CASE importance WHEN 'high' THEN 1 ELSE 2 END, COALESCE(updated_at, extracted_at, sent_at) DESC
-            LIMIT 8
-        """, (now.isoformat(),))).fetchall()
-
-    # User memory (preferences, habits)
-    user_mem_rows = []
-    try:
-        async with aiosqlite.connect(db_path) as _db:
-            _db.row_factory = aiosqlite.Row
-            user_mem_rows = await (await _db.execute(
-                "SELECT key, value, category FROM user_memory ORDER BY updated_at DESC LIMIT 20"
-            )).fetchall()
-    except Exception:
-        pass
-
-    lines = [
-        "Turn context snapshot. 如需精确完整数据，请调用工具。",
-        f"Chaoxing logged in: {bool(getattr(chaoxing_svc, 'is_logged_in', False))}",
-    ]
-    if user_mem_rows:
-        lines.append("【用户记忆】" + "；".join(
-            f"{r['key']}: {r['value']} ({r['category']})" for r in user_mem_rows
-        ))
-    if rows["reminders"]:
-        lines.append("未来 48 小时提醒：" + "；".join(
-            f"{r['id']} {r['title']} {r['due_at']} important={bool(r['is_important'])}" for r in rows["reminders"]
-        ))
-    if rows["events"]:
-        lines.append("未来 48 小时日历：" + "；".join(
-            f"{r['id']} {r['title']} {r['start_at']}-{r['end_at']}" for r in rows["events"]
-        ))
-    if rows["courses"]:
-        lines.append("未来 48 小时课程：" + "；".join(
-            f"{r['title']} {r['start_at']}-{r['end_at']} {r['location'] or ''}" for r in rows["courses"]
-        ))
-    # ── Unified memory: tier-based injection (replaces raw chaoxing + dingtalk snippets) ──
-    # Uses MemoryRepository.query_for_agent():
-    #   Layer A — tier 0/1 (CRITICAL/ACTIONABLE): always inject
-    #   Layer B — tier 2 (CONTEXT): keyword-matched to current turn
-    # Legacy rows["memory"] still used as fallback if new repo has nothing.
-    try:
-        from app.memory.base import MemoryRepository
-        # Layer A (tier 0/1) always injects; Layer B (tier 2) is keyword-matched
-        # against the current user message so dynamic context surfaces per-turn.
-        repo = MemoryRepository(db_path)
-        mem_entries = await repo.query_for_agent(now, user_message=user_message, max_tier=2, limit=8)
-        if mem_entries:
-            def _tier_label(t):
-                return {0:"🔴", 1:"🟡", 2:"⚪"}.get(t, "⚪")
-            lines.append("Memory（重要程度递减）：" + "；".join(
-                f"{_tier_label(r['hierarchy_tier'])}[{r['source_type']}] id={r['id']} {r['title']}"
-                f"{' → '+r['action_hint'] if r.get('action_hint') else ''}"
-                for r in mem_entries
-            ))
-        elif rows["memory"]:
-            # fallback to legacy query
-            lines.append("重要消息：" + "；".join(
-                f"[{r['importance']}] {r['title']} {r['action_hint'] or ''}"
-                for r in rows["memory"]
-            ))
-    except Exception:
-        if rows["memory"]:
-            lines.append("重要学习通消息：" + "；".join(
-                f"[{r['importance']}] {r['title']} {r['action_hint'] or ''}"
-                for r in rows["memory"]
-            ))
-    return "\n".join(lines)
-
-
-def orchestrator_plan(user_text: str) -> dict:
-    # Routing lives in intent.py (synonym-expanded, scored). Greetings / generic
-    # messages still get an empty plan → minimal context (no fallback to all 4).
-    from .intent import plan_subagents
-    return plan_subagents(user_text)
-
-
-async def collect_reports(plan, db_path, chaoxing_svc, now, window_hours=48) -> str:
-    end = now + timedelta(hours=window_hours)
-    lines = [f"日程 Orchestrator 已先做了轻量只读汇总。注意力窗口：未来 {window_hours} 小时。"]
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-        if "calendar" in plan["sub_agents"]:
-            rows = await (await db.execute("""
-                SELECT title, start_at, end_at FROM server_events
-                WHERE end_at >= ? AND start_at <= ? ORDER BY start_at ASC LIMIT 5
-            """, (now.isoformat(), end.isoformat()))).fetchall()
-            lines.append("Calendar: " + ("；".join(f"{r['title']} {r['start_at']}-{r['end_at']}" for r in rows) or "无未来 48 小时事件。"))
-        if "reminders" in plan["sub_agents"]:
-            rows = await (await db.execute("""
-                SELECT title, due_at FROM server_reminders
-                WHERE is_completed=0 AND (due_at IS NULL OR due_at <= ?) ORDER BY due_at IS NULL, due_at ASC LIMIT 5
-            """, (end.isoformat(),))).fetchall()
-            lines.append("Reminders: " + ("；".join(f"{r['title']} {r['due_at'] or '无截止'}" for r in rows) or "无待办。"))
-        if "courses" in plan["sub_agents"]:
-            rows = await (await db.execute("""
-                SELECT title, start_at, end_at, location FROM server_courses
-                WHERE end_at >= ? AND start_at <= ? ORDER BY start_at ASC LIMIT 5
-            """, (now.isoformat(), end.isoformat()))).fetchall()
-            lines.append("Courses: " + ("；".join(f"{r['title']} {r['start_at']}-{r['end_at']} {r['location'] or ''}" for r in rows) or "无未来 48 小时课程。"))
-        if "chaoxing" in plan["sub_agents"]:
-            rows = await (await db.execute("""
-                SELECT title, action_hint, importance FROM chaoxing_memory_entries
-                WHERE archived_at IS NULL AND importance IN ('high','medium')
-                ORDER BY CASE importance WHEN 'high' THEN 1 ELSE 2 END, COALESCE(updated_at, extracted_at, sent_at) DESC LIMIT 5
-            """)).fetchall()
-            lines.append("Chaoxing memory: " + ("；".join(f"[{r['importance']}] {r['title']} {r['action_hint'] or ''}" for r in rows) or "为空；如用户需要最新消息，调用 refresh_message_memory。"))
-    if plan.get("expects_mutation"):
-        lines.append("Mutation note: 写操作必须调用工具并经过确认。")
-    return "\n".join(lines)
-
-
-def _filter_schedule_tools(tools: list, user_message: str) -> list:
-    """Return the full tool set.
-
-    The redesign gives the schedule agent a broad, auditable tool surface. The
-    earlier keyword pre-screen is intentionally disabled so multi-turn replies
-    and unusual phrasing cannot silently remove the exact tool the model needs.
-    """
-    return tools
-
-
 def _build_schedule_tools() -> list:
     from .agent_service import ToolDefinition
     return [
         ToolDefinition(
-            name="get_schedule_context",
-            description="获取当前日程上下文：今日课程、作业截止、重要学习通消息、备忘录",
+            name="get_current_time",
+            description="获取当前 UTC/Asia-Shanghai 时间和今日/本周边界。",
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        ToolDefinition(
+            name="get_data_schema",
+            description="查看 agent 可只读查询的业务表、字段、时间口径和 importance/tier 说明。",
+            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        ToolDefinition(
+            name="search_database",
+            description="安全只读数据库自查。只允许 SELECT/PRAGMA table_info，默认返回 brief 摘要行。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string", "description": "只读 SELECT 或 PRAGMA table_info 查询"},
+                    "params": {"type": "array", "items": {"type": "string"}},
+                    "limit": {"type": "integer", "description": "最多返回行数，默认20，最大100"},
+                    "detail_level": {"type": "string", "enum": ["brief", "detailed"], "description": "默认 brief"},
+                },
+                "required": ["sql"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
+            name="get_record_detail",
+            description="按表名和 id 读取单条记录详情；用于 brief 查询后的二次核实。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "允许查询的业务表名"},
+                    "id": {"type": "string", "description": "记录 id"},
+                },
+                "required": ["source", "id"],
+                "additionalProperties": False,
+            },
         ),
         ToolDefinition(
             name="read_message_memory",
@@ -486,33 +377,6 @@ def _build_schedule_tools() -> list:
                 "properties": {
                     "limit": {"type": "integer", "description": "最多返回条数，默认 10，最大 50"}
                 },
-                "additionalProperties": False,
-            },
-        ),
-        ToolDefinition(
-            name="db_query",
-            description="只读查询本地 SQLite 数据库。仅允许 SELECT/PRAGMA，结果会限制条数。",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "sql": {"type": "string", "description": "SELECT 或 PRAGMA 查询"},
-                    "limit": {"type": "integer", "description": "最多返回行数，默认 20，最大 100"},
-                },
-                "required": ["sql"],
-                "additionalProperties": False,
-            },
-        ),
-        ToolDefinition(
-            name="db_execute",
-            description="执行受限数据库写操作。只在用户明确要求底层修正数据时使用，必须先进入确认队列并写审计。",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "sql": {"type": "string", "description": "单条 INSERT/UPDATE/DELETE SQL"},
-                    "params": {"type": "array", "items": {"type": "string"}, "description": "参数数组"},
-                    "reason": {"type": "string", "description": "为什么要执行这条写操作"},
-                },
-                "required": ["sql", "reason"],
                 "additionalProperties": False,
             },
         ),
@@ -858,7 +722,31 @@ async def _execute_schedule_tool(
     api_key: str | None = None,
     conversation_id: str = "default",
 ) -> str:
-    if tc.name == "get_schedule_context":
+    if tc.name == "get_current_time":
+        from app.services.agent_data_tools import current_time_payload
+        return json.dumps(current_time_payload(), ensure_ascii=False, indent=2)
+    elif tc.name == "get_data_schema":
+        from app.services.agent_data_tools import schema_payload
+        return json.dumps(schema_payload(), ensure_ascii=False, indent=2)
+    elif tc.name == "search_database":
+        from app.services.agent_data_tools import search_database
+        result = await search_database(
+            db_path,
+            sql=tc.arguments.get("sql", ""),
+            params=tc.arguments.get("params") or [],
+            limit=int(tc.arguments.get("limit") or 20),
+            detail_level=tc.arguments.get("detail_level") or "brief",
+        )
+        return result.to_json()
+    elif tc.name == "get_record_detail":
+        from app.services.agent_data_tools import get_record_detail
+        result = await get_record_detail(
+            db_path,
+            source=tc.arguments.get("source", ""),
+            record_id=tc.arguments.get("id", ""),
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    elif tc.name == "get_schedule_context":
         return await _get_schedule_context(chaoxing_svc, db_path)
     elif tc.name in ("read_message_memory", "get_chaoxing_memory"):
         importance = tc.arguments.get("importance_filter", "high_and_medium")
@@ -1034,28 +922,6 @@ async def _execute_schedule_tool(
                 (limit,),
             )).fetchall()
         return json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2)
-    elif tc.name == "db_query":
-        sql = (tc.arguments.get("sql") or "").strip()
-        limit = max(1, min(int(tc.arguments.get("limit") or 20), 100))
-        ok, reason = _validate_read_sql(sql)
-        if not ok:
-            return f"错误: {reason}"
-        return await _db_query(db_path, sql, limit)
-    elif tc.name == "db_execute":
-        confirmation = _require_confirmation(tc.name, user_message, tc.arguments)
-        if confirmation:
-            await _store_pending_mutation(db_path, tc.name, tc.arguments, conversation_id)
-            return confirmation
-        sql = (tc.arguments.get("sql") or "").strip()
-        params = tc.arguments.get("params") or []
-        ok, reason = _validate_write_sql(sql)
-        if not ok:
-            return f"错误: {reason}"
-        async with aiosqlite.connect(db_path) as db:
-            cur = await db.execute(sql, tuple(params))
-            await db.commit()
-        result = json.dumps({"ok": True, "rows_affected": cur.rowcount}, ensure_ascii=False)
-        return result
     elif tc.name == "list_reminders":
         from .schedule_store import list_reminders
         reminders = await list_reminders(db_path, include_completed=bool(tc.arguments.get("include_completed", False)))
@@ -1443,7 +1309,6 @@ _NEEDS_CONFIRMATION = {
     "delete_calendar_event",
     "import_timetable",      # wipes + replaces the whole timetable
     "schedule_notification",
-    "db_execute",
 }
 
 
@@ -1635,56 +1500,6 @@ async def _kb_search(db_path: str, query: str, limit: int) -> str:
     }, ensure_ascii=False, indent=2)
 
 
-async def _db_query(db_path: str, sql: str, limit: int) -> str:
-    limited_sql = sql.rstrip().rstrip(";")
-    if re.match(r"^\s*select\b", limited_sql, re.I) and not re.search(r"\blimit\b", limited_sql, re.I):
-        limited_sql = f"{limited_sql} LIMIT {limit}"
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-        rows = await (await db.execute(limited_sql)).fetchmany(limit)
-    return json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2)
-
-
-def _validate_read_sql(sql: str) -> tuple[bool, str]:
-    clean = sql.strip()
-    if not clean:
-        return False, "SQL 为空"
-    if _has_multiple_statements(clean):
-        return False, "只允许单条 SQL"
-    if not re.match(r"^(select|pragma)\b", clean, re.I):
-        return False, "只允许 SELECT/PRAGMA"
-    if re.search(r"\b(insert|update|delete|drop|alter|attach|detach|replace|create|vacuum)\b", clean, re.I):
-        return False, "只读查询不能包含写操作"
-    return True, ""
-
-
-def _validate_write_sql(sql: str) -> tuple[bool, str]:
-    clean = sql.strip()
-    if not clean:
-        return False, "SQL 为空"
-    if _has_multiple_statements(clean):
-        return False, "只允许单条 SQL"
-    if not re.match(r"^(insert|update|delete)\b", clean, re.I):
-        return False, "只允许 INSERT/UPDATE/DELETE"
-    if re.search(r"\b(drop|alter|attach|detach|create|vacuum|pragma|reindex)\b", clean, re.I):
-        return False, "不允许结构变更或附加数据库"
-    allowed = (
-        "server_reminders", "server_events", "server_courses",
-        "scheduled_notifications", "chaoxing_memory_entries",
-        "entities", "facts", "settings", "user_memory",
-    )
-    if not any(re.search(rf"\b{re.escape(table)}\b", clean, re.I) for table in allowed):
-        return False, "写操作只能作用于允许的业务表"
-    return True, ""
-
-
-def _has_multiple_statements(sql: str) -> bool:
-    stripped = sql.strip()
-    if ";" not in stripped:
-        return False
-    return stripped.rstrip(";").count(";") > 0
-
-
 def _fts_query_for_sql(text: str) -> str:
     words = []
     for token in (text or "").replace('"', " ").split():
@@ -1864,7 +1679,6 @@ def _confirmed_result_text(tool_name: str, result: str) -> str:
         "update_calendar_event": "已更新日历事件。",
         "delete_calendar_event": "已删除日历事件。",
         "import_timetable": "已导入课程表。",
-        "db_execute": "已执行数据库修正。",
     }.get(tool_name, "已执行操作。")
     return f"{action}\n{result}"
 

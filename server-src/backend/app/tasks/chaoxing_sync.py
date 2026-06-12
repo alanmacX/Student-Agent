@@ -99,14 +99,6 @@ async def run_chaoxing_probe_adaptive(app_state, scheduler):
         elif not messages_changed:
             logger.debug("Skip LLM extraction: no changed conversations this tick")
 
-        # ── Step 3: dashboard briefing — only if data changed (self-gates too) ─
-        if (messages_changed or memory_changed or new_entry_ids) and provider and api_key:
-            try:
-                from app.services.dashboard_briefing import generate_and_store
-                await generate_and_store(db_path, provider, model, api_key, now)
-            except Exception as e:
-                logger.error(f"Dashboard briefing failed in probe: {e}")
-
     run_at = datetime.now(timezone.utc) + timedelta(seconds=next_interval)
     scheduler.add_job(
         run_chaoxing_probe_adaptive,

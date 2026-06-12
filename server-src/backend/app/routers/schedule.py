@@ -313,9 +313,10 @@ async def stream_schedule_chat(request: Request):
         await db.commit()
         next_pos += 1
 
-        # Load history (last 20 turns = 40 messages to stay within token budget)
+        # V2 keeps only a short verbatim window; durable facts must be queried
+        # via tools instead of carried as ever-growing chat context.
         history_rows = await (await db.execute(
-            "SELECT role, content FROM schedule_messages WHERE session_id=? ORDER BY position DESC LIMIT 40",
+            "SELECT role, content FROM schedule_messages WHERE session_id=? ORDER BY position DESC LIMIT 12",
             (session_id,),
         )).fetchall()
         history = list(reversed([dict(r) for r in history_rows]))
@@ -586,7 +587,7 @@ async def get_schedule_sidebar(request: Request):
     reminders = await list_reminders(settings.database_path)
     zjut_term = await _load_zjut_term_meta()
 
-    from app.services.dashboard_briefing import load_briefing
+    from app.services.dashboard_v2 import load_briefing
     briefing = await load_briefing(settings.database_path)
 
     return {
@@ -671,9 +672,6 @@ async def _resolve_schedule_provider():
 async def refresh_briefing():
     """Force the dashboard briefing (natural-language summary + LLM todo list) to
     regenerate, then return it. Used by the overview when no briefing exists yet."""
-    from app.services.dashboard_briefing import generate_and_store
-    provider, model, api_key = await _resolve_schedule_provider()
-    briefing = await generate_and_store(
-        settings.database_path, provider, model, api_key, force=True
-    )
+    from app.services.dashboard_v2 import refresh_briefing
+    briefing = await refresh_briefing(settings.database_path)
     return {"briefing": briefing}
