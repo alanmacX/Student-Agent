@@ -119,9 +119,22 @@ async def schedule_ladder_for_item(
 
     steps = build_ladder(kind, due, importance, now, title=title, body=body)
     inserted = 0
-    from app.memory.dispatch import schedule_push
+    from app.memory.dispatch import schedule_push, notify_now
 
     for step in steps:
+        # 立即档("now")不能进 scheduled_notifications:它的 trigger=当前时间,每次
+        # 重建都生成新 id、已发的行又不会被 cancel 清掉 → 同一条被反复重推。
+        # 改走 notify_now,由 has_notified(item:stage) 去重,只发一次。
+        if step.name == "now":
+            res = await notify_now(
+                db_path, step.title, step.body,
+                item_id=f"{item_id}:{step.name}",
+                notif_type="ladder_now",
+                data={"type": "ladder"},
+            )
+            if not res.get("skipped"):
+                inserted += 1
+            continue
         result = await schedule_push(
             db_path,
             step.title,
