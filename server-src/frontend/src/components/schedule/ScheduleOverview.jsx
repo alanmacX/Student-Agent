@@ -92,7 +92,9 @@ export default function ScheduleOverview() {
 
   useEffect(() => {
     refresh();
-    const handler = () => refresh();
+    const handler = (event) => {
+      if (!event.detail?.tab || event.detail.tab === "overview") refresh();
+    };
     window.addEventListener("app-refresh", handler);
     return () => {
       window.removeEventListener("app-refresh", handler);
@@ -120,7 +122,7 @@ export default function ScheduleOverview() {
   return (
     <div className="h-full overflow-y-auto bg-[var(--panel-bg)]">
       {/* Header — island, width-matched to content */}
-      <div className="sticky top-0 z-10 mx-auto flex w-full max-w-3xl items-center justify-between gap-2 px-3 pt-3 pb-1 lg:px-6">
+      <div className="sticky top-0 z-10 mx-auto flex w-full max-w-7xl items-center justify-between gap-2 px-3 pt-3 pb-1 lg:px-6">
         <div className="glass-pill flex min-h-[48px] items-center rounded-full px-5 py-2">
           <h1 className="text-sm font-semibold text-white">日程总览</h1>
         </div>
@@ -133,24 +135,28 @@ export default function ScheduleOverview() {
         </button>
       </div>
 
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 pb-40 md:pb-6 lg:p-6 lg:pb-10">
-        <TodayCard
-          data={data}
-          loading={loading}
-          pendingCount={pendingAssignments.length}
-          onRefreshBriefing={handleRefreshBriefing}
-          refreshingBriefing={refreshingBriefing}
-        />
-        <StatusStrip />
-        <TokenSummary />
+      <div className="mx-auto grid w-full max-w-7xl grid-cols-1 gap-4 p-3 pb-40 md:pb-6 lg:grid-cols-[minmax(340px,0.9fr)_minmax(620px,1.45fr)] lg:p-6 lg:pb-10 xl:grid-cols-[minmax(380px,0.82fr)_minmax(760px,1.55fr)]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <TodayCard
+            data={data}
+            loading={loading}
+            pendingCount={pendingAssignments.length}
+            onRefreshBriefing={handleRefreshBriefing}
+            refreshingBriefing={refreshingBriefing}
+          />
+          <StatusStrip />
+          <TokenSummary />
+        </div>
 
-        <ScheduleSection
-          courses={courses}
-          events={data?.week_events || data?.events || []}
-          term={data?.zjut_term}
-          onRefresh={refresh}
-          loading={loading}
-        />
+        <div className="min-w-0">
+          <ScheduleSection
+            courses={courses}
+            events={data?.week_events || data?.events || []}
+            term={data?.zjut_term}
+            onRefresh={refresh}
+            loading={loading}
+          />
+        </div>
       </div>
     </div>
   );

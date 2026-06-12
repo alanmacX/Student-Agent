@@ -30,7 +30,14 @@ export default function StatusStrip() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const handler = (event) => {
+      if (!event.detail?.tab || event.detail.tab === "overview") load();
+    };
+    window.addEventListener("app-refresh", handler);
+    return () => window.removeEventListener("app-refresh", handler);
+  }, [load]);
 
   if (loading) {
     return (

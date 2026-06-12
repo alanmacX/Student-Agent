@@ -11,6 +11,16 @@ import { broadcastAccessToken, setAccessToken } from "./api/client";
 
 const VALID_TABS = ["overview", "agent", "hub", "notifications", "settings"];
 
+function initialTabFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  const queryTab = params.get("tab");
+  const hashTab = window.location.hash.replace("#", "");
+  if (VALID_TABS.includes(hashTab)) return hashTab;
+  if (VALID_TABS.includes(queryTab)) return queryTab;
+  if (queryTab === "chat") return "agent";
+  return "overview";
+}
+
 class ErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -93,14 +103,24 @@ function usePullToRefresh(onRefresh) {
 }
 
 function App() {
-  const [tab, setTab] = useState("overview");
+  const [tab, setTab] = useState(initialTabFromLocation);
+  const [mountedTabs, setMountedTabs] = useState(() => new Set([initialTabFromLocation()]));
   const [tokenRequired, setTokenRequired] = useState(false);
 
   const handleRefresh = useCallback(() => {
-    window.location.reload();
-  }, []);
+    window.dispatchEvent(new CustomEvent("app-refresh", { detail: { tab } }));
+  }, [tab]);
 
   usePullToRefresh(handleRefresh);
+
+  useEffect(() => {
+    setMountedTabs((prev) => {
+      if (prev.has(tab)) return prev;
+      const next = new Set(prev);
+      next.add(tab);
+      return next;
+    });
+  }, [tab]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -168,11 +188,11 @@ function App() {
         {/* Main content */}
         <main className="min-w-0 flex-1 overflow-hidden md:rounded-[18px] md:border md:border-white/10 md:bg-[var(--panel-bg)] md:shadow-2xl md:shadow-black/30">
           <ErrorBoundary>
-            <div className={tab !== "overview" ? "hidden" : "h-full"}><ScheduleOverview /></div>
-            <div className={tab !== "agent" ? "hidden" : "h-full"}><ScheduleView /></div>
-            <div className={tab !== "hub" ? "hidden" : "h-full"}><HubView /></div>
-            <div className={tab !== "notifications" ? "hidden" : "h-full"}><NotificationCenter /></div>
-            <div className={tab !== "settings" ? "hidden" : "h-full"}><SettingsView /></div>
+            {mountedTabs.has("overview") && <div className={tab !== "overview" ? "hidden" : "h-full"}><ScheduleOverview /></div>}
+            {mountedTabs.has("agent") && <div className={tab !== "agent" ? "hidden" : "h-full"}><ScheduleView /></div>}
+            {mountedTabs.has("hub") && <div className={tab !== "hub" ? "hidden" : "h-full"}><HubView /></div>}
+            {mountedTabs.has("notifications") && <div className={tab !== "notifications" ? "hidden" : "h-full"}><NotificationCenter /></div>}
+            {mountedTabs.has("settings") && <div className={tab !== "settings" ? "hidden" : "h-full"}><SettingsView /></div>}
           </ErrorBoundary>
         </main>
       </div>
@@ -180,7 +200,6 @@ function App() {
       {/* Daily briefing popup on PWA open */}
       <DailyPopup />
 
-      {/* Mobile tab bar */}
       <TabBar active={tab} onChange={handleTabChange} onRefresh={handleRefresh} />
       {tokenRequired && <AccessTokenDialog onClose={() => setTokenRequired(false)} />}
 

@@ -215,7 +215,9 @@ export default function RemindersPanel() {
 
   useEffect(() => {
     load();
-    const handler = () => load();
+    const handler = (event) => {
+      if (!event.detail?.tab || event.detail.tab === "hub") load();
+    };
     window.addEventListener("app-refresh", handler);
     return () => window.removeEventListener("app-refresh", handler);
   }, [load]);

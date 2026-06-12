@@ -205,6 +205,16 @@ export default function ScheduleView() {
     }
   }, [activeSession?.id]);
 
+  useEffect(() => {
+    const handler = (event) => {
+      if (event.detail?.tab && event.detail.tab !== "agent") return;
+      refreshSessions();
+      if (activeSession?.id) loadMessages(activeSession.id);
+    };
+    window.addEventListener("app-refresh", handler);
+    return () => window.removeEventListener("app-refresh", handler);
+  }, [activeSession?.id, loadMessages, refreshSessions]);
+
   // Scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });

@@ -116,7 +116,7 @@ function StatsBar({ notifications }) {
   if (total === 0) return null;
 
   return (
-    <div className="glass-card flex gap-3 px-4 py-3">
+    <div className="glass-card grid grid-cols-4 gap-3 px-4 py-3 lg:grid-cols-2">
       {[
         { label: "总计", value: total, color: "text-white" },
         { label: "已送达", value: received, color: "text-blue-400" },
@@ -145,7 +145,7 @@ function SentTab({ groups }) {
     );
   }
   return (
-    <div className="stagger mx-auto flex w-full max-w-2xl flex-col gap-5">
+    <div className="stagger mx-auto flex w-full flex-col gap-5">
       {groups.map(({ label, items }) => (
         <div key={label}>
           <p className="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-tertiary)]">
@@ -177,7 +177,7 @@ function ScheduledTab({ items }) {
     );
   }
   return (
-    <div className="stagger mx-auto flex w-full max-w-2xl flex-col gap-3">
+    <div className="stagger mx-auto flex w-full flex-col gap-3">
       {items.map((item) => (
         <div key={item.id} className="glass-card px-4 py-3">
           <div className="flex items-start justify-between gap-2">
@@ -213,7 +213,7 @@ function StandbyTab({ items }) {
     );
   }
   return (
-    <div className="stagger mx-auto flex w-full max-w-2xl flex-col gap-2">
+    <div className="stagger mx-auto flex w-full flex-col gap-2">
       {items.map((item) => (
         <div key={item.id} className="glass-card px-4 py-3">
           <div className="flex items-center justify-between gap-2">
@@ -322,7 +322,9 @@ export default function NotificationCenter() {
 
     startPolling();
     document.addEventListener("visibilitychange", onVisibilityChange);
-    const onAppRefresh = () => load(true);
+    const onAppRefresh = (event) => {
+      if (!event.detail?.tab || event.detail.tab === "notifications") load(true);
+    };
     window.addEventListener("app-refresh", onAppRefresh);
 
     return () => {
@@ -343,7 +345,7 @@ export default function NotificationCenter() {
   return (
     <div className="relative flex h-full flex-col bg-[var(--panel-bg)]">
       {/* Header — floating island over the scrolling content */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 mx-auto flex w-full max-w-2xl items-center justify-between gap-2 px-3 pt-3 md:px-6">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 mx-auto flex w-full max-w-6xl items-center justify-between gap-2 px-3 pt-3 md:px-6">
         <div className="glass-pill pointer-events-auto flex min-h-[48px] items-center rounded-full px-5 py-2">
           <h2 className="text-sm font-semibold text-white">通知</h2>
         </div>
@@ -359,66 +361,64 @@ export default function NotificationCenter() {
 
       {/* Scroll body — content flows beneath the floating header */}
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-[72px] pb-36 md:pb-4 md:px-6">
-      {/* Tabs — glass segmented control */}
-      <div className="mx-auto w-full max-w-2xl shrink-0">
-        <div className="glass-pill flex gap-1 rounded-full p-1.5">
-          {tabs.map(({ id, label, icon: Icon, count }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              className={`flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-medium transition-colors duration-200 ${
-                activeTab === id
-                  ? "bg-[var(--hover-bg)] text-white shadow-sm"
-                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-              }`}
-            >
-              <Icon size={13} />
-              <span className="hidden sm:inline">{label}</span>
-              {count > 0 && (
-                <span className="rounded-full bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px]">{count}</span>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Stats (sent tab only) */}
-      {!loading && !error && activeTab === "sent" && (
-        <div className="mx-auto w-full max-w-2xl pt-2">
-          <StatsBar notifications={notifications} />
-        </div>
-      )}
-
-      {/* Body */}
-      <div className="mx-auto w-full max-w-2xl pt-3">
-        {loading && (
-          <div className="flex items-center justify-center py-20 text-[var(--text-tertiary)]">
-            <div className="flex items-center gap-2 text-sm">
-              <RefreshCw size={14} className="animate-spin" />
-              加载中...
+        <div className="mx-auto grid w-full max-w-6xl gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <aside className="min-w-0 space-y-3 lg:sticky lg:top-3 lg:self-start">
+            {/* Tabs — glass segmented control */}
+            <div className="glass-pill flex gap-1 rounded-full p-1.5 lg:flex-col lg:rounded-2xl">
+              {tabs.map(({ id, label, icon: Icon, count }) => (
+                <button
+                  key={id}
+                  onClick={() => setActiveTab(id)}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-medium transition-colors duration-200 lg:justify-start lg:rounded-xl lg:px-3.5 ${
+                    activeTab === id
+                      ? "bg-[var(--hover-bg)] text-white shadow-sm"
+                      : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                  }`}
+                >
+                  <Icon size={13} />
+                  <span className="hidden sm:inline">{label}</span>
+                  {count > 0 && (
+                    <span className="rounded-full bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] lg:ml-auto">{count}</span>
+                  )}
+                </button>
+              ))}
             </div>
-          </div>
-        )}
 
-        {!loading && error && (
-          <div className="flex items-center justify-center py-20">
-            <div className="text-center text-sm text-red-400">
-              <p className="mb-2">加载失败</p>
-              <p className="text-xs text-[var(--text-tertiary)]">{error}</p>
-              <button
-                onClick={() => load()}
-                className="mt-3 rounded-xl border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--hover-bg)]"
-              >
-                重试
-              </button>
-            </div>
-          </div>
-        )}
+            {!loading && !error && activeTab === "sent" && (
+              <StatsBar notifications={notifications} />
+            )}
+          </aside>
 
-        {!loading && !error && activeTab === "sent" && <SentTab groups={groups} />}
-        {!loading && !error && activeTab === "scheduled" && <ScheduledTab items={scheduled} />}
-        {!loading && !error && activeTab === "standby" && <StandbyTab items={standbyLog} />}
-      </div>
+          <div className="min-w-0">
+            {loading && (
+              <div className="flex items-center justify-center py-20 text-[var(--text-tertiary)]">
+                <div className="flex items-center gap-2 text-sm">
+                  <RefreshCw size={14} className="animate-spin" />
+                  加载中...
+                </div>
+              </div>
+            )}
+
+            {!loading && error && (
+              <div className="flex items-center justify-center py-20">
+                <div className="text-center text-sm text-red-400">
+                  <p className="mb-2">加载失败</p>
+                  <p className="text-xs text-[var(--text-tertiary)]">{error}</p>
+                  <button
+                    onClick={() => load()}
+                    className="mt-3 rounded-xl border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--hover-bg)]"
+                  >
+                    重试
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!loading && !error && activeTab === "sent" && <SentTab groups={groups} />}
+            {!loading && !error && activeTab === "scheduled" && <ScheduledTab items={scheduled} />}
+            {!loading && !error && activeTab === "standby" && <StandbyTab items={standbyLog} />}
+          </div>
+        </div>
       </div>
     </div>
   );
