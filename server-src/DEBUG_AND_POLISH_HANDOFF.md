@@ -329,7 +329,7 @@ curl -s -o /dev/null -w '%{http_code}' "$H/api/ideas"           # 无 token 应 
 根因:`MessageBubble.jsx` 渲染逻辑正常(`message.pendingConfirmation && !confirmed`)。问题在 `ScheduleView.jsx`:流式结束后 `loadMessages` 从 DB 重载(DB 无 transient 的 pendingConfirmation),靠 `pendingConfirmRef` 重挂,**存在竞态**(重挂晚于重载→按钮闪没)。
 修:让 pending 状态独立于 DB 重载——确认/取消前一直保留在本地 message 上;或重载后同步从 ref 重挂并保证顺序(await loadMessages 后再 set)。先在桌面复现(造一个会触发待确认的写操作)。
 
-### E4. chat 时间不对 [TODO]
+### E4. chat 时间不对 [DONE]
 根因:消息入库用 `datetime.utcnow()`(naive UTC),前端可能当本地直接显示 → 差 8 小时;或 agent 时间上下文(`build_dynamic_context`)与展示不一致。
 修:统一存 UTC ISO(aware),前端一律转本地展示;核对 `routers/schedule.py`/`chat.py` 存消息时间戳与前端渲染。
 
@@ -355,5 +355,5 @@ curl -s -o /dev/null -w '%{http_code}' "$H/api/ideas"           # 无 token 应 
 ### E11. 幻觉(图2:编造"数据提交 明天16:59") [DONE prompt层]
 已在 `STATIC_SYSTEM_PROMPT` 加"【汇总禁止杜撰】只能逐字引用 context/工具结果里真实存在的条目,严禁无中生有作业/截止/时间"。**建议进一步(TODO)**:后端对 agent 的汇总做硬校验——参考 reconciler 的 id 白名单,汇总里出现的"条目"必须能在 context 找到对应,否则拦截/标注。
 
-### E-bonus. 通知重复轰炸 [TODO,高优,对应 B2]
+### E-bonus. 通知重复轰炸 [DONE]
 实测发现同一条通知(计算机组成课设验收、课外学术成果)**一天被推 5+ 次**(05:52/07:22/08:22/10:14/11:14)。去重失效。查:`deadline_check`/`distill`/`standby` 哪个在重复捞同一 item;按 B2 用 `entity_recently_notified(item_id, 24)` 跨渠道抑制 + 各渠道 context 排除 `notification_log` 已推。**这个体验伤害大,优先修。**
