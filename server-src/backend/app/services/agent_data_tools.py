@@ -45,6 +45,18 @@ TIME_FIELD_HINTS = {
     "dingtalk_messages.created_at": "钉钉原始时间，毫秒 epoch。",
 }
 
+DEFAULT_SCHEMA_TABLES = {
+    "server_reminders",
+    "server_events",
+    "server_courses",
+    "chaoxing_assignments",
+    "chaoxing_memory_entries",
+    "dingtalk_messages",
+    "entities",
+    "facts",
+    "notification_log",
+}
+
 
 @dataclass
 class SearchResult:
@@ -55,7 +67,7 @@ class SearchResult:
         return json.dumps(self.payload, ensure_ascii=False, indent=2)
 
 
-async def schema_payload(db_path: str | None = None) -> dict[str, Any]:
+async def schema_payload(db_path: str | None = None, tables: list[str] | None = None) -> dict[str, Any]:
     payload = {
         "ok": True,
         "tables": ALLOWED_TABLES,
@@ -79,7 +91,8 @@ async def schema_payload(db_path: str | None = None) -> dict[str, Any]:
         ],
     }
     if db_path:
-        payload["columns"] = await table_columns(db_path)
+        requested = {str(t).strip() for t in (tables or []) if str(t).strip()}
+        payload["columns"] = await table_columns(db_path, requested or DEFAULT_SCHEMA_TABLES)
     return payload
 
 
@@ -115,7 +128,7 @@ async def search_database(
 ) -> SearchResult:
     sql = (sql or "").strip()
     params = params or []
-    limit = max(1, min(int(limit or 20), 100))
+    limit = max(1, min(int(limit or 10), 50))
     detail_level = "detailed" if detail_level == "detailed" else "brief"
     ok, reason = validate_read_sql(sql)
     if not ok:
@@ -238,7 +251,7 @@ def _with_limit(sql: str, limit: int) -> str:
 
 def _clean_row(row: dict[str, Any], detail_level: str) -> dict[str, Any]:
     cleaned: dict[str, Any] = {}
-    max_len = 1600 if detail_level == "detailed" else 360
+    max_len = 1200 if detail_level == "detailed" else 220
     for key, value in row.items():
         if SENSITIVE_RE.search(key):
             continue

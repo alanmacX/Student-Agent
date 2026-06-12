@@ -347,7 +347,7 @@ async def run_agentic_loop(
             yield {"type": "text", "content": "任务未完成：Agent 达到工具调用轮次上限，但没有生成最终回答。"}
 
 
-def _truncate_tool_result(result: str, max_chars: int = 8000) -> str:
+def _truncate_tool_result(result: str, max_chars: int = 4000) -> str:
     if len(result) <= max_chars:
         return result
     return result[:max_chars] + f"\n…（内容已截断，共 {len(result)} 字符，仅传递前 {max_chars} 字符）"

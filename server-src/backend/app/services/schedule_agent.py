@@ -17,6 +17,7 @@ STATIC_SYSTEM_PROMPT = """你是 ChatBot 的日程 Agent，负责提醒、日历
 核心规则：
 - 事实回答必须来自工具结果；没有查到就说没查到，不要凭预设 context 或记忆猜。
 - 复杂、跨表、调查类问题优先用 search_database；不确定字段时先用 get_data_schema。
+- 调查类问题先做 1-3 个关键词宽搜；search_database 最多调用 6 次，不要穷举所有表。
 - 查询默认 brief；用户追问细节、需要核对来源或执行写操作前，再用 get_record_detail。
 - 课程表属于本地课程数据，不是 Calendar。查课用 list_courses/search_database，不要把课程误建为日历事件。
 - 写操作只有用户明确要求时才调用；被加入确认队列后，前端按钮负责确认，你只需简短说明将执行什么。
@@ -101,7 +102,17 @@ async def run_schedule_agent(
         "import_timetable",
     }
 
+    tool_call_counts: dict[str, int] = {}
+    max_tool_calls = {"search_database": 6, "get_data_schema": 2, "get_record_detail": 4}
+
     async def execute_tool(tc):
+        tool_call_counts[tc.name] = tool_call_counts.get(tc.name, 0) + 1
+        max_calls = max_tool_calls.get(tc.name)
+        if max_calls and tool_call_counts[tc.name] > max_calls:
+            return json.dumps({
+                "ok": False,
+                "error": f"{tc.name} 本轮已达到 {max_calls} 次上限，请基于已有证据回答；如果证据不足就明确说明。",
+            }, ensure_ascii=False)
         result = await _execute_schedule_tool(
             tc, chaoxing_svc, db_path, user_message, provider, model, api_key,
             conversation_id=conversation_id,
@@ -138,12 +149,12 @@ async def run_schedule_agent(
 
     async for event in run_agentic_loop(
         messages, tools, execute_tool, provider, model, api_key,
-        max_iterations=8, thinking_budget=thinking_budget,
+        max_iterations=6, thinking_budget=thinking_budget,
         require_tool_call=_requires_evidence_tool(user_message),
         tool_retry_message=(
             "本轮问题涉及用户数据或日程事实，不能直接凭语言模型回答。"
             "请先调用 get_current_time、search_database、get_data_schema 或一个领域读取工具取得证据；"
-            "如果查不到，再明确说明没查到。"
+            "优先少量宽搜，不要穷举；如果查不到，再明确说明没查到。"
         ),
     ):
         yield event
@@ -226,8 +237,14 @@ def _build_schedule_tools() -> list:
         ),
         ToolDefinition(
             name="get_data_schema",
-            description="查看 agent 可只读查询的业务表、字段、时间口径和 importance/tier 说明。",
-            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            description="查看 agent 可只读查询的业务表、真实列名、时间口径和 importance/tier 说明。可传 tables 限定列名范围。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "tables": {"type": "array", "items": {"type": "string"}, "description": "只返回这些表的列名；不传则返回核心表列名"},
+                },
+                "additionalProperties": False,
+            },
         ),
         ToolDefinition(
             name="search_database",
@@ -747,7 +764,7 @@ async def _execute_schedule_tool(
         return json.dumps(current_time_payload(), ensure_ascii=False, indent=2)
     elif tc.name == "get_data_schema":
         from app.services.agent_data_tools import schema_payload
-        return json.dumps(await schema_payload(db_path), ensure_ascii=False, indent=2)
+        return json.dumps(await schema_payload(db_path, tc.arguments.get("tables") or []), ensure_ascii=False, indent=2)
     elif tc.name == "search_database":
         from app.services.agent_data_tools import search_database
         result = await search_database(
