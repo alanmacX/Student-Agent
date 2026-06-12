@@ -49,25 +49,25 @@ function ReminderItem({ item, onToggle, onDelete, onToggleImportant }) {
   return (
     <div
       className={`flex items-start gap-3 rounded-2xl border border-[var(--border)] px-3 py-3 transition ${
-        item.completedAt ? "opacity-50" : "bg-[var(--surface)]"
+        item.isCompleted ? "opacity-50" : "bg-[var(--surface)]"
       }`}
     >
       {/* Complete toggle */}
       <button
         onClick={() => onToggle(item)}
         className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition ${
-          item.completedAt
+          item.isCompleted
             ? "border-green-500 bg-green-500/20 text-green-400"
             : "border-[var(--border)] text-transparent hover:border-[var(--accent)] hover:text-[var(--accent)]"
         }`}
-        aria-label={item.completedAt ? "标为未完成" : "标为完成"}
+        aria-label={item.isCompleted ? "标为未完成" : "标为完成"}
       >
         <Check size={11} strokeWidth={3} />
       </button>
 
       {/* Content */}
       <div className="min-w-0 flex-1">
-        <p className={`text-sm font-medium ${item.completedAt ? "line-through text-[var(--text-tertiary)]" : "text-white"}`}>
+        <p className={`text-sm font-medium ${item.isCompleted ? "line-through text-[var(--text-tertiary)]" : "text-white"}`}>
           {item.title}
         </p>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -206,13 +206,19 @@ export default function RemindersPanel() {
       const data = await fetchReminders(showCompleted);
       setReminders(Array.isArray(data) ? data : []);
     } catch (e) {
-      setError(e.message);
+      const message = String(e.message || e);
+      setError(message.includes("401") ? "需要访问令牌，保存后会自动重试。" : "提醒事项暂时没拉下来。");
     } finally {
       setLoading(false);
     }
   }, [showCompleted]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const handler = () => load();
+    window.addEventListener("app-refresh", handler);
+    return () => window.removeEventListener("app-refresh", handler);
+  }, [load]);
 
   const handleAdd = async (data) => {
     await createReminder(data);
@@ -222,7 +228,7 @@ export default function RemindersPanel() {
 
   const handleToggle = async (item) => {
     await updateReminder(item.id, {
-      completedAt: item.completedAt ? null : new Date().toISOString(),
+      isCompleted: !item.isCompleted,
     });
     await load();
   };
@@ -237,8 +243,8 @@ export default function RemindersPanel() {
     await load();
   };
 
-  const active = reminders.filter((r) => !r.completedAt);
-  const completed = reminders.filter((r) => r.completedAt);
+  const active = reminders.filter((r) => !r.isCompleted);
+  const completed = reminders.filter((r) => r.isCompleted);
   const important = active.filter((r) => r.isImportant);
   const rest = active.filter((r) => !r.isImportant).sort((a, b) => {
     if (!a.dueDate && !b.dueDate) return 0;

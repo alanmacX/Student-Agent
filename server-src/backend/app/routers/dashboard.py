@@ -28,25 +28,37 @@ async def dashboard_today():
         courses = await _fetchall(db, """
             SELECT id, title, start_at, end_at, location, notes
             FROM server_courses
-            WHERE end_at >= ? AND start_at < ?
+            WHERE datetime(end_at) >= datetime(?) AND datetime(start_at) < datetime(?)
             ORDER BY start_at ASC
             LIMIT 30
         """, (today_start.isoformat(), tomorrow_start.isoformat()))
         events = await _fetchall(db, """
             SELECT id, title, start_at, end_at, location, notes, calendar_name
             FROM server_events
-            WHERE end_at >= ? AND start_at < ?
+            WHERE datetime(end_at) >= datetime(?) AND datetime(start_at) < datetime(?)
             ORDER BY start_at ASC
             LIMIT 30
         """, (today_start.isoformat(), tomorrow_start.isoformat()))
+        overdue_reminders = await _fetchall(db, """
+            SELECT id, title, due_at, notes, list_name, is_important
+            FROM server_reminders
+            WHERE is_completed=0
+              AND due_at IS NOT NULL
+              AND datetime(due_at) < datetime(?)
+            ORDER BY due_at ASC
+            LIMIT 30
+        """, (now_iso,))
         reminders = await _fetchall(db, """
             SELECT id, title, due_at, notes, list_name, is_important
             FROM server_reminders
             WHERE is_completed=0
-              AND (due_at IS NULL OR due_at < ?)
+              AND (
+                due_at IS NULL
+                OR (datetime(due_at) >= datetime(?) AND datetime(due_at) < datetime(?))
+              )
             ORDER BY due_at IS NULL, due_at ASC
             LIMIT 30
-        """, (tomorrow_start.isoformat(),))
+        """, (now_iso, tomorrow_start.isoformat()))
         memory_items = await _fetchall(db, """
             SELECT id, title, summary, action_hint, importance, kind, category,
                    expires_at, entity_id, source_type
@@ -71,7 +83,7 @@ async def dashboard_today():
             SELECT id, title, body, scheduled_at, source_type, source_id, reason
             FROM scheduled_notifications
             WHERE sent_at IS NULL AND cancelled_at IS NULL
-              AND scheduled_at >= ? AND scheduled_at <= ?
+              AND datetime(scheduled_at) >= datetime(?) AND datetime(scheduled_at) <= datetime(?)
             ORDER BY scheduled_at ASC
             LIMIT 30
         """, (now_iso, week_end.isoformat()))
@@ -79,14 +91,16 @@ async def dashboard_today():
         far_events = await _fetchall(db, """
             SELECT id, title, start_at, end_at, location
             FROM server_events
-            WHERE start_at > ? AND start_at <= ?
+            WHERE datetime(start_at) > datetime(?) AND datetime(start_at) <= datetime(?)
             ORDER BY start_at ASC
             LIMIT 40
         """, (week_end.isoformat(), longterm_horizon.isoformat()))
         far_reminders = await _fetchall(db, """
             SELECT id, title, due_at, notes, is_important
             FROM server_reminders
-            WHERE is_completed=0 AND due_at > ? AND due_at <= ?
+            WHERE is_completed=0
+              AND datetime(due_at) > datetime(?)
+              AND datetime(due_at) <= datetime(?)
             ORDER BY due_at ASC
             LIMIT 40
         """, (week_end.isoformat(), longterm_horizon.isoformat()))
@@ -127,6 +141,20 @@ async def dashboard_today():
             LIMIT 20
         """)
 
+    overdue = _dedupe([
+        *[
+            _overdue_todo(
+                r["id"],
+                r["title"],
+                r.get("due_at"),
+                "high" if r.get("is_important") else "medium",
+                r.get("notes"),
+                now,
+            )
+            for r in overdue_reminders
+        ],
+    ])
+
     plan = _dedupe([
         *[_event("course", c["id"], c["title"], c["start_at"], c["end_at"], c.get("location")) for c in courses],
         *[_event("event", e["id"], e["title"], e["start_at"], e["end_at"], e.get("location")) for e in events],
@@ -156,6 +184,7 @@ async def dashboard_today():
     return {
         "date": local_now.date().isoformat(),
         "now": local_now.isoformat(),
+        "overdue": sorted(overdue, key=lambda x: x.get("sort_at") or "9999")[:40],
         "plan": sorted(plan, key=lambda x: x.get("sort_at") or "9999")[:40],
         "upcoming": sorted(upcoming, key=lambda x: x.get("sort_at") or "9999")[:40],
         "longterm": sorted(longterm, key=lambda x: x.get("sort_at") or "9999")[:40],
@@ -171,7 +200,8 @@ async def dashboard_today():
         "counts": {
             "courses_today": len(courses),
             "events_today": len(events),
-            "open_reminders": len(reminders),
+            "open_reminders": len(reminders) + len(overdue_reminders),
+            "overdue_reminders": len(overdue_reminders),
             "active_memory": len(memory_items),
             "upcoming_notifications": len(scheduled),
         },
@@ -207,6 +237,39 @@ def _todo(source: str, row_id: str, title: str, due_at: str | None, importance: 
         "detail": detail or "",
         "sort_at": due_at or "",
     }
+
+
+def _overdue_todo(
+    row_id: str,
+    title: str,
+    due_at: str | None,
+    importance: str | None,
+    detail: str | None,
+    now: datetime,
+) -> dict:
+    item = _todo("reminder", row_id, title, due_at, importance, detail)
+    item["overdue"] = True
+    item["overdue_days"] = _overdue_days(due_at, now)
+    return item
+
+
+def _overdue_days(due_at: str | None, now: datetime) -> int:
+    due = _parse_iso(due_at)
+    if not due:
+        return 0
+    return max(0, (now.astimezone(LOCAL_TZ).date() - due.astimezone(LOCAL_TZ).date()).days)
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _dedupe(items: list[dict]) -> list[dict]:

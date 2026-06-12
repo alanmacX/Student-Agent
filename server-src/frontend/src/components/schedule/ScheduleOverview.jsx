@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCw, Sparkles, BookOpen, CalendarClock, ChevronDown, MapPin } from "lucide-react";
+import { RefreshCw, Sparkles, BookOpen, CalendarClock, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { fetchScheduleSidebar, refreshBriefing } from "../../api/schedule";
 import StatusStrip from "./StatusStrip";
 import TokenSummary from "./TokenSummary";
@@ -13,23 +13,22 @@ const WEEKDAYS = [
   { label: "周六", value: 6 },
   { label: "周日", value: 0 },
 ];
+const CHINA_TZ = "Asia/Shanghai";
 
-// Must match the backend period schedule in
-// web/backend/app/services/schedule_store.py (PERIOD_START / PERIOD_END),
-// otherwise imported courses land in the wrong rows.
+// Must match backend/app/services/zjut_import.py::PERIOD_TIMES.
 const PERIODS = [
   { id: 1, label: "1", start: "08:00", end: "08:45" },
   { id: 2, label: "2", start: "08:55", end: "09:40" },
-  { id: 3, label: "3", start: "10:00", end: "10:45" },
-  { id: 4, label: "4", start: "10:55", end: "11:40" },
-  { id: 5, label: "5", start: "14:00", end: "14:45" },
-  { id: 6, label: "6", start: "14:55", end: "15:40" },
-  { id: 7, label: "7", start: "16:00", end: "16:45" },
-  { id: 8, label: "8", start: "16:55", end: "17:40" },
-  { id: 9, label: "9", start: "19:00", end: "19:45" },
-  { id: 10, label: "10", start: "19:55", end: "20:40" },
-  { id: 11, label: "11", start: "20:50", end: "21:35" },
-  { id: 12, label: "12", start: "21:45", end: "22:30" },
+  { id: 3, label: "3", start: "09:55", end: "10:40" },
+  { id: 4, label: "4", start: "10:50", end: "11:35" },
+  { id: 5, label: "5", start: "11:35", end: "13:30" },
+  { id: 6, label: "6", start: "13:30", end: "14:15" },
+  { id: 7, label: "7", start: "14:25", end: "15:10" },
+  { id: 8, label: "8", start: "15:25", end: "16:10" },
+  { id: 9, label: "9", start: "16:20", end: "17:05" },
+  { id: 10, label: "10", start: "18:30", end: "19:15" },
+  { id: 11, label: "11", start: "19:25", end: "20:10" },
+  { id: 12, label: "12", start: "20:20", end: "21:05" },
 ];
 
 export default function ScheduleOverview() {
@@ -145,7 +144,13 @@ export default function ScheduleOverview() {
         <StatusStrip />
         <TokenSummary />
 
-        <ScheduleSection courses={courses} events={data?.week_events || data?.events || []} />
+        <ScheduleSection
+          courses={courses}
+          events={data?.week_events || data?.events || []}
+          term={data?.zjut_term}
+          onRefresh={refresh}
+          loading={loading}
+        />
       </div>
     </div>
   );
@@ -328,166 +333,188 @@ function insightToTodo(item) {
   };
 }
 
-function ScheduleSection({ courses, events }) {
-  const [weekStart, weekEnd] = currentWeekRange();
+function ScheduleSection({ courses, events, term, onRefresh, loading }) {
+  const [weekOffset, setWeekOffset] = useState(0);
+  const selected = useMemo(() => selectedWeek(term, weekOffset), [term, weekOffset]);
   const thisWeekCount = useMemo(() => {
     const names = new Set();
     for (const c of courses) {
       const t = new Date(c.startDate).getTime();
-      if (!Number.isNaN(t) && t >= weekStart && t < weekEnd) names.add(c.title || c.name);
+      if (!Number.isNaN(t) && t >= selected.weekStartMs && t < selected.weekEndMs) names.add(c.title || c.name);
     }
     return names.size;
-  }, [courses, weekStart, weekEnd]);
+  }, [courses, selected.weekStartMs, selected.weekEndMs]);
 
   return (
     <section className="animate-rise surface-card min-w-0 p-3 md:p-4" style={{ animationDelay: "120ms" }}>
       <div className="mb-3 flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
           <CalendarClock size={14} className="text-[var(--text-tertiary)]" />
-          <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-tertiary)]">本周课表</h2>
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-tertiary)]">课程表</h2>
         </div>
         <span className="text-[11px] text-[var(--text-tertiary)]">
-          {courses.length > 0 ? `${thisWeekCount} 门课` : "未导入"}
+          {courses.length > 0 ? `${thisWeekCount} 门课 · ${selected.rangeLabel}` : "未导入"}
         </span>
       </div>
       {courses.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-center text-[var(--text-tertiary)]">
           <p className="text-sm">课程表未导入</p>
-          <p className="mt-1 text-xs">在 Agent 页面发送 JSON 课程数据即可导入</p>
+          <p className="mt-1 text-xs">在设置页导入正方教务课表后会显示在这里</p>
         </div>
       ) : (
-        <>
-          <div className="md:hidden"><DayList courses={courses} events={events} /></div>
-          <div className="hidden md:block"><WeekTable courses={courses} events={events} /></div>
-        </>
+        <WeekTable
+          courses={courses}
+          events={events}
+          weekStartMs={selected.weekStartMs}
+          weekEndMs={selected.weekEndMs}
+        />
       )}
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--border)] pt-3">
+        <button
+          type="button"
+          onClick={() => setWeekOffset((v) => v - 1)}
+          className="grid h-10 w-10 place-items-center rounded-xl bg-[var(--surface)] text-[var(--text-secondary)] transition hover:bg-[var(--hover-bg)] hover:text-white active:scale-95"
+          aria-label="上一周"
+        >
+          <ChevronLeft size={17} />
+        </button>
+        <div className="min-w-0 text-center">
+          <p className="text-sm font-semibold text-white">{selected.weekLabel}</p>
+          <p className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">{term?.semesterLabel || selected.rangeLabel}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="grid h-10 w-10 place-items-center rounded-xl bg-[var(--surface)] text-[var(--text-secondary)] transition hover:bg-[var(--hover-bg)] hover:text-white active:scale-95"
+            aria-label="刷新课表"
+          >
+            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setWeekOffset((v) => v + 1)}
+            className="grid h-10 w-10 place-items-center rounded-xl bg-[var(--surface)] text-[var(--text-secondary)] transition hover:bg-[var(--hover-bg)] hover:text-white active:scale-95"
+            aria-label="下一周"
+          >
+            <ChevronRight size={17} />
+          </button>
+        </div>
+      </div>
     </section>
   );
 }
 
-// Monday 00:00 of the current week .. next Monday 00:00 (local time).
-function currentWeekRange() {
+function selectedWeek(term, offset) {
+  const current = new Date();
+  if (term?.week1Monday) {
+    const base = new Date(`${term.week1Monday}T00:00:00+08:00`);
+    const currentWeek = term.currentWeek || weekNumberFrom(base, current);
+    const weekNumber = Math.max(1, currentWeek + offset);
+    const start = new Date(base.getTime() + (weekNumber - 1) * 7 * 24 * 60 * 60 * 1000);
+    const end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
+    return {
+      weekStartMs: start.getTime(),
+      weekEndMs: end.getTime(),
+      weekLabel: `第${weekNumber}周`,
+      rangeLabel: formatDateRange(start, end),
+    };
+  }
+  const start = startOfLocalWeek(current);
+  start.setDate(start.getDate() + offset * 7);
+  const end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const weekLabel = offset === 0 ? "本周" : offset > 0 ? `下${offset}周` : `上${Math.abs(offset)}周`;
+  return {
+    weekStartMs: start.getTime(),
+    weekEndMs: end.getTime(),
+    weekLabel,
+    rangeLabel: formatDateRange(start, end),
+  };
+}
+
+function weekNumberFrom(base, date) {
+  const baseWall = chinaWallDate(base);
+  const dateWall = chinaWallDate(date);
+  const baseStart = new Date(baseWall.getFullYear(), baseWall.getMonth(), baseWall.getDate());
+  const dateStart = new Date(dateWall.getFullYear(), dateWall.getMonth(), dateWall.getDate());
+  return Math.max(1, Math.floor((dateStart - baseStart) / (7 * 24 * 60 * 60 * 1000)) + 1);
+}
+
+// Monday 00:00 of the current week.
+function startOfLocalWeek(value) {
   const now = new Date();
+  if (value) now.setTime(value.getTime());
   const day = now.getDay(); // 0=Sun..6=Sat
   const mondayOffset = (day + 6) % 7; // days since Monday
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset);
-  const end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
-  return [start.getTime(), end.getTime()];
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset);
 }
 
-// ── Mobile day-list: grouped by weekday, no horizontal scroll ─────────────
-function DayList({ courses, events }) {
-  const [weekStart, weekEnd] = currentWeekRange();
-  const today = new Date().getDay(); // 0=Sun..6=Sat
-
-  const items = useMemo(() => {
-    const weekItems = [
-      ...courses
-        .filter((e) => { const t = new Date(e.startDate).getTime(); return !Number.isNaN(t) && t >= weekStart && t < weekEnd; })
-        .map((event) => ({ event, kind: "course" })),
-      ...events
-        .filter((e) => { const t = new Date(e.startDate).getTime(); return !Number.isNaN(t) && t >= weekStart && t < weekEnd; })
-        .map((event) => ({ event, kind: event.kind || "event" })),
-    ];
-    // Group by weekday (Mon=1 .. Sun=0)
-    const grouped = {};
-    for (const item of weekItems) {
-      const wd = new Date(item.event.startDate).getDay(); // 0=Sun
-      if (!grouped[wd]) grouped[wd] = [];
-      grouped[wd].push(item);
-    }
-    // Sort within each day by start time
-    for (const wd of Object.keys(grouped)) {
-      grouped[wd].sort((a, b) => new Date(a.event.startDate) - new Date(b.event.startDate));
-    }
-    return grouped;
-  }, [courses, events, weekStart, weekEnd]);
-
-  // Render Mon..Sun, skipping empty days
-  const dayOrder = [1, 2, 3, 4, 5, 6, 0];
-  const hasAny = dayOrder.some((wd) => items[wd]?.length > 0);
-  if (!hasAny) return null;
-
-  return (
-    <div className="space-y-3">
-      {dayOrder.map((wd) => {
-        const dayItems = items[wd];
-        if (!dayItems?.length) return null;
-        const isToday = wd === today;
-        return (
-          <div key={wd}>
-            <div className={`mb-1.5 flex items-center gap-2 px-1 ${isToday ? "" : ""}`}>
-              <span className={`text-xs font-semibold ${isToday ? "text-[var(--accent)]" : "text-[var(--text-tertiary)]"}`}>
-                {WEEKDAYS.find((d) => d.value === wd)?.label}
-              </span>
-              {isToday && <span className="rounded-full bg-[var(--accent)]/15 px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)]">今天</span>}
-            </div>
-            <div className="space-y-1">
-              {dayItems.map(({ event, kind }) => (
-                <div
-                  key={`${kind}-${event.id}`}
-                  className={`flex items-center gap-3 rounded-2xl px-3.5 py-2.5 transition active:scale-[0.98] ${
-                    kind === "course"
-                      ? "bg-emerald-500/10 ring-1 ring-emerald-500/20"
-                      : "bg-[var(--accent)]/10 ring-1 ring-[var(--accent)]/20"
-                  }`}
-                >
-                  <div className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-[13px] font-semibold text-[var(--text-primary)]">
-                      {event.title || event.name}
-                    </span>
-                    {(event.location || event.startDate) && (
-                      <span className="mt-0.5 flex items-center gap-1 text-[11px] text-[var(--text-tertiary)]">
-                        {event.location && <MapPin size={10} className="shrink-0" />}
-                        {event.location || formatTime(event.startDate)}
-                      </span>
-                    )}
-                  </div>
-                  <span className="shrink-0 text-[11px] font-medium text-[var(--text-tertiary)]">
-                    {formatTime(event.startDate)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+function formatDateRange(start, end) {
+  const lastDay = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+  const left = start.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric", timeZone: CHINA_TZ });
+  const right = lastDay.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric", timeZone: CHINA_TZ });
+  return `${left} - ${right}`;
 }
 
-function WeekTable({ courses, events }) {
-  const [weekStart, weekEnd] = currentWeekRange();
-  // The backend returns multiple weeks of courses (a ±2-week window). Restrict
-  // to the current week so each slot shows one instance, not one per week.
+function WeekTable({ courses, events, weekStartMs, weekEndMs }) {
   const inThisWeek = (event) => {
     const t = new Date(event.startDate).getTime();
-    return !Number.isNaN(t) && t >= weekStart && t < weekEnd;
+    return !Number.isNaN(t) && t >= weekStartMs && t < weekEndMs;
   };
   const items = [
     ...courses.filter(inThisWeek).map((event) => ({ event, kind: "course" })),
     ...events.filter(inThisWeek).map((event) => ({ event, kind: event.kind || "event" })),
-  ];
+  ].map(toGridItem).filter(Boolean);
+
   return (
-    <div className="overflow-x-auto">
-      <div className="min-w-[760px] overflow-hidden rounded-2xl border border-[var(--border)]">
-        <div className="grid grid-cols-[38px_repeat(7,minmax(94px,1fr))] border-b border-[var(--border)] bg-[var(--deep-bg)]">
-          <Cell muted>节</Cell>
-          {WEEKDAYS.map((day) => <Cell key={day.value} muted>{day.label}</Cell>)}
-        </div>
-        {PERIODS.map((period) => (
-          <div key={period.id} className="grid min-h-[64px] grid-cols-[38px_repeat(7,minmax(94px,1fr))] border-b border-[var(--border)] last:border-b-0">
-            <Cell muted>{period.label}</Cell>
-            {WEEKDAYS.map((day) => (
-              <div key={day.value} className="min-h-[64px] border-l border-[var(--border)] p-1.5">
-                {itemsForCell(items, day.value, period).slice(0, 2).map(({ event, kind }) => (
-                  <div key={`${kind}-${event.id}`} className={`mb-1 rounded-xl px-2 py-1.5 transition duration-150 ease-[var(--ease-spring)] hover:scale-[1.03] active:scale-95 ${kind === "course" ? "bg-emerald-500/85" : "bg-[var(--accent)]/85"}`}>
-                    <p className="line-clamp-2 text-xs font-semibold leading-4 text-white">{event.title || event.name}</p>
-                    <p className="truncate text-[11px] text-white/80">{event.location || formatTime(event.startDate)}</p>
-                  </div>
-                ))}
-              </div>
-            ))}
+    <div className="overflow-x-auto pb-1">
+      <div
+        className="grid min-w-[760px] overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--deep-bg)]"
+        style={{
+          gridTemplateColumns: "42px repeat(7, minmax(96px, 1fr))",
+          gridTemplateRows: `40px repeat(${PERIODS.length}, 66px)`,
+        }}
+      >
+        <GridHeader style={{ gridColumn: 1, gridRow: 1 }}>节</GridHeader>
+        {WEEKDAYS.map((day, idx) => (
+          <GridHeader key={day.value} style={{ gridColumn: idx + 2, gridRow: 1 }}>
+            {day.label}
+          </GridHeader>
+        ))}
+
+        {PERIODS.map((period, periodIdx) => (
+          <div
+            key={period.id}
+            className="grid place-items-center border-t border-[var(--border)] text-[11px] font-semibold text-[var(--text-tertiary)]"
+            style={{ gridColumn: 1, gridRow: periodIdx + 2 }}
+          >
+            <span>{period.label}</span>
+          </div>
+        ))}
+        {PERIODS.map((period, periodIdx) => (
+          WEEKDAYS.map((day, dayIdx) => (
+            <div
+              key={`${period.id}-${day.value}`}
+              className="border-l border-t border-[var(--border)]"
+              style={{ gridColumn: dayIdx + 2, gridRow: periodIdx + 2 }}
+            />
+          ))
+        ))}
+
+        {items.map((item) => (
+          <div
+            key={`${item.kind}-${item.event.id}`}
+            className={`z-[1] m-1 overflow-hidden rounded-xl px-2 py-1.5 shadow-sm ring-1 ring-white/20 transition duration-150 ease-[var(--ease-spring)] hover:scale-[1.02] active:scale-[0.98] ${item.color}`}
+            style={{
+              gridColumn: item.dayIndex + 2,
+              gridRow: `${item.periodIndex + 2} / span ${item.span}`,
+            }}
+          >
+            <p className="line-clamp-2 text-xs font-semibold leading-4 text-white">{item.title}</p>
+            <p className="mt-0.5 truncate text-[11px] text-white/85">{item.location || item.teacher || formatTime(item.event.startDate)}</p>
+            {item.teacher && item.location && (
+              <p className="truncate text-[10px] text-white/70">{item.teacher}</p>
+            )}
           </div>
         ))}
       </div>
@@ -495,20 +522,99 @@ function WeekTable({ courses, events }) {
   );
 }
 
-function Cell({ children, muted }) {
-  return <div className={`grid min-h-9 place-items-center text-xs font-semibold ${muted ? "text-[var(--text-tertiary)]" : "text-white"}`}>{children}</div>;
+function GridHeader({ children, style }) {
+  return (
+    <div
+      className="grid place-items-center border-l border-[var(--border)] text-xs font-semibold text-[var(--text-tertiary)] first:border-l-0"
+      style={style}
+    >
+      {children}
+    </div>
+  );
 }
 
-// Assign each item to the single period row whose START time is closest to the
-// item's start time (within 25 min). Matching against the period's full span
-// caused items to appear in two adjacent rows.
-function itemsForCell(items, weekday, period) {
-  return items.filter(({ event }) => {
-    const start = new Date(event.startDate);
-    if (Number.isNaN(start.getTime()) || start.getDay() !== weekday) return false;
-    const minutes = start.getHours() * 60 + start.getMinutes();
-    return Math.abs(minutes - toMinutes(period.start)) <= 25;
+function toGridItem({ event, kind }) {
+  const start = new Date(event.startDate);
+  const end = new Date(event.endDate || event.startDate);
+  if (Number.isNaN(start.getTime())) return null;
+  const startWall = chinaWallDate(start);
+  const endWall = chinaWallDate(end);
+  const dayIndex = WEEKDAYS.findIndex((day) => day.value === startWall.getDay());
+  if (dayIndex < 0) return null;
+  const periodIndex = periodIndexForStart(startWall);
+  if (periodIndex < 0) return null;
+  const endIndex = periodIndexForEnd(endWall, periodIndex);
+  const meta = parseCourseMeta(event.notes);
+  return {
+    event,
+    kind,
+    title: event.title || event.name,
+    location: event.location,
+    teacher: meta.teacher,
+    dayIndex,
+    periodIndex,
+    span: Math.max(1, endIndex - periodIndex + 1),
+    color: kind === "course" ? courseColor(event.title || event.name) : "bg-sky-500/85",
+  };
+}
+
+function periodIndexForStart(date) {
+  const minutes = date.getHours() * 60 + date.getMinutes();
+  let bestIdx = -1;
+  let bestDelta = Infinity;
+  PERIODS.forEach((period, idx) => {
+    const delta = Math.abs(minutes - toMinutes(period.start));
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestIdx = idx;
+    }
   });
+  if (bestDelta <= 35) return bestIdx;
+  return PERIODS.findIndex((period) => {
+    const start = toMinutes(period.start);
+    const end = toMinutes(period.end);
+    return minutes >= start && minutes < end;
+  });
+}
+
+function periodIndexForEnd(date, startIndex) {
+  if (Number.isNaN(date.getTime())) return startIndex;
+  const minutes = date.getHours() * 60 + date.getMinutes();
+  let endIndex = startIndex;
+  for (let i = startIndex; i < PERIODS.length; i += 1) {
+    const periodEnd = toMinutes(PERIODS[i].end);
+    if (minutes <= periodEnd + 10) {
+      endIndex = i;
+      break;
+    }
+    endIndex = i;
+  }
+  return endIndex;
+}
+
+function parseCourseMeta(notes = "") {
+  if (!notes) return {};
+  const first = String(notes).split("|").find((part) => part && !part.startsWith("第"));
+  if (!first) return {};
+  return { teacher: first.replace(/^教师[:：]/, "") };
+}
+
+function courseColor(title = "") {
+  const colors = [
+    "bg-emerald-500/85",
+    "bg-cyan-500/85",
+    "bg-amber-500/90",
+    "bg-rose-500/85",
+    "bg-violet-500/85",
+    "bg-teal-500/85",
+  ];
+  let hash = 0;
+  for (const ch of title) hash = (hash + ch.charCodeAt(0)) % colors.length;
+  return colors[hash];
+}
+
+function chinaWallDate(value) {
+  return new Date(value.toLocaleString("en-US", { timeZone: CHINA_TZ }));
 }
 
 function toMinutes(value) {
@@ -518,5 +624,5 @@ function toMinutes(value) {
 
 function formatTime(value) {
   if (!value) return "";
-  return new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  return new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: CHINA_TZ });
 }

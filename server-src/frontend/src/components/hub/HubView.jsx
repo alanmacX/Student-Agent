@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, CalendarDays, CalendarRange, CheckCircle2, Clock, Lightbulb, Plus, RefreshCw, ShieldCheck, StickyNote, Trash2 } from "lucide-react";
+import { Activity, AlertTriangle, CalendarDays, CalendarRange, CheckCircle2, Clock, Lightbulb, Plus, RefreshCw, ShieldCheck, StickyNote, Trash2 } from "lucide-react";
 import { apiFetch } from "../../api/client";
 import RemindersPanel from "../settings/RemindersPanel";
 
@@ -8,13 +8,16 @@ export default function HubView() {
   const [input, setInput] = useState("");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [dashboardError, setDashboardError] = useState("");
 
   const refreshDashboard = async () => {
     setLoading(true);
+    setDashboardError("");
     try {
       setDashboard(await apiFetch("/api/dashboard/today"));
     } catch (e) {
       console.error("Failed to load dashboard:", e);
+      setDashboardError("今天的面板暂时没拉下来。");
     } finally {
       setLoading(false);
     }
@@ -77,9 +80,14 @@ export default function HubView() {
       {/* Scrollable content */}
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-[72px] pb-36 md:pb-4 md:px-6">
         <div className="mx-auto max-w-3xl space-y-4 stagger">
-          <DashboardSummary data={dashboard} loading={loading} />
+          <DashboardSummary data={dashboard} loading={loading} error={dashboardError} />
 
           <section className="surface-card animate-rise p-4">
+            <SectionTitle icon={AlertTriangle} label="逾期" tone="danger" />
+            <ItemList items={dashboard?.overdue || []} empty="没有逾期事项。" variant="overdue" />
+          </section>
+
+          <section className="surface-card animate-rise p-4" style={{ animationDelay: "45ms" }}>
             <SectionTitle icon={CalendarDays} label="今天" />
             <ItemList items={dashboard?.plan || []} empty="今天没有排进来的事项。" />
           </section>
@@ -154,13 +162,14 @@ export default function HubView() {
   );
 }
 
-function DashboardSummary({ data, loading }) {
+function DashboardSummary({ data, loading, error }) {
   const budget = data?.budget;
   const used = budget?.used_tokens || 0;
   const limit = budget?.daily_token_budget || 0;
   const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
   const stats = [
     { label: "今日课程", value: data?.counts?.courses_today ?? "-" },
+    { label: "逾期", value: data?.counts?.overdue_reminders ?? "-" },
     { label: "活跃事项", value: data?.counts?.active_memory ?? "-" },
     { label: "待发推送", value: data?.counts?.upcoming_notifications ?? "-" },
   ];
@@ -170,7 +179,8 @@ function DashboardSummary({ data, loading }) {
         <SectionTitle icon={Activity} label={data?.date || "今日"} />
         {loading && <RefreshCw size={14} className="animate-spin text-[var(--text-tertiary)]" />}
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2">
+      {error && <p className="mt-3 rounded-xl bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {stats.map((s) => (
           <div key={s.label} className="rounded-xl bg-[var(--surface)] px-3 py-2">
             <p className="text-[11px] text-[var(--text-tertiary)]">{s.label}</p>
@@ -191,10 +201,10 @@ function DashboardSummary({ data, loading }) {
   );
 }
 
-function SectionTitle({ icon: Icon, label }) {
+function SectionTitle({ icon: Icon, label, tone = "accent" }) {
   return (
     <div className="flex items-center gap-2">
-      <Icon size={14} className="text-[var(--accent)]" />
+      <Icon size={14} className={tone === "danger" ? "text-red-400" : "text-[var(--accent)]"} />
       <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-tertiary)]">
         {label}
       </h3>
@@ -202,19 +212,28 @@ function SectionTitle({ icon: Icon, label }) {
   );
 }
 
-function ItemList({ items, empty }) {
+function ItemList({ items, empty, variant = "default" }) {
   if (!items?.length) {
     return <p className="mt-3 text-sm text-[var(--text-tertiary)]">{empty}</p>;
   }
   return (
     <div className="mt-3 space-y-2">
       {items.slice(0, 8).map((item) => (
-        <div key={item.key} className="flex gap-3 rounded-xl bg-[var(--surface)] px-3 py-2.5">
-          <CheckCircle2 size={15} className={`mt-0.5 shrink-0 ${item.importance === "high" ? "text-orange-400" : "text-[var(--accent-soft)]"}`} />
+        <div
+          key={item.key}
+          className={`flex gap-3 rounded-xl px-3 py-2.5 ${
+            variant === "overdue"
+              ? "border border-red-500/25 bg-red-500/10"
+              : "bg-[var(--surface)]"
+          }`}
+        >
+          <CheckCircle2 size={15} className={`mt-0.5 shrink-0 ${item.overdue ? "text-red-400" : item.importance === "high" ? "text-orange-400" : "text-[var(--accent-soft)]"}`} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <p className="min-w-0 flex-1 truncate text-sm font-medium text-white">{item.title}</p>
-              <span className="shrink-0 text-[11px] text-[var(--text-tertiary)]">{formatWhen(item.start_at || item.due_at)}</span>
+              <span className={`shrink-0 text-[11px] ${item.overdue ? "font-semibold text-red-300" : "text-[var(--text-tertiary)]"}`}>
+                {item.overdue ? formatOverdue(item) : formatWhen(item.start_at || item.due_at)}
+              </span>
             </div>
             {(item.detail || item.location) && (
               <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">{item.detail || item.location}</p>
@@ -247,5 +266,20 @@ function formatWhen(value) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  if (sameDay) {
+    return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  }
+  const diff = date.getTime() - now.getTime();
+  if (diff > 0 && diff <= 7 * 24 * 60 * 60 * 1000) {
+    return `还剩${Math.ceil(diff / (24 * 60 * 60 * 1000))}天`;
+  }
   return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatOverdue(item) {
+  const days = Number.isFinite(Number(item?.overdue_days)) ? Number(item.overdue_days) : 0;
+  if (days <= 0) return "刚逾期";
+  return `逾期${days}天`;
 }

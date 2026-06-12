@@ -121,7 +121,7 @@ async def list_events(db_path: str, days: int = 14) -> list[dict]:
         rows = await (await db.execute(
             """
             SELECT * FROM server_events
-            WHERE end_at >= ? AND start_at <= ?
+            WHERE datetime(end_at) >= datetime(?) AND datetime(start_at) <= datetime(?)
             ORDER BY start_at ASC
             """,
             (now.isoformat(), end.isoformat()),
@@ -245,7 +245,8 @@ async def import_timetable(db_path: str, semester_start_str: str, courses: list[
             end_dt = course_date.replace(hour=eh, minute=em, second=0, microsecond=0)
             rows_to_insert.append((
                 str(uuid.uuid4()), name, "导入课程表",
-                start_dt.isoformat(), end_dt.isoformat(),
+                start_dt.astimezone(timezone.utc).isoformat(),
+                end_dt.astimezone(timezone.utc).isoformat(),
                 location, notes, ts, ts,
             ))
 
@@ -260,18 +261,17 @@ async def import_timetable(db_path: str, semester_start_str: str, courses: list[
     return {"ok": True, "inserted": len(rows_to_insert), "courses": len([c for c in courses if (c.get("name") or "").strip()])}
 
 
-async def list_courses(db_path: str, days: int = 14) -> list[dict]:
-    # Build bounds in Beijing time to match the stored +08:00 TEXT timestamps.
-    now_bj = datetime.now(BEIJING_TZ)
-    start = (now_bj - timedelta(days=7)).isoformat()
-    end = (now_bj + timedelta(days=days)).isoformat()
+async def list_courses(db_path: str, days: int = 14, past_days: int = 7) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(days=past_days)).isoformat()
+    end = (now + timedelta(days=days)).isoformat()
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """
             SELECT id, title, calendar_name, start_at, end_at, location, notes
             FROM server_courses
-            WHERE end_at >= ? AND start_at <= ?
+            WHERE datetime(end_at) >= datetime(?) AND datetime(start_at) <= datetime(?)
             ORDER BY start_at ASC
             """,
             (start, end),

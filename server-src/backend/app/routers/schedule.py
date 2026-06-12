@@ -5,7 +5,8 @@ from fastapi.responses import StreamingResponse
 import json
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from app.database import db_conn
 from app.services.schedule_agent import (
     execute_confirmed_pending_mutation,
@@ -580,9 +581,10 @@ async def get_schedule_sidebar(request: Request):
             except Exception:
                 pass
 
-    courses_local = await list_courses(settings.database_path, days=14)
-    events = await list_events(settings.database_path, days=14)
+    courses_local = await list_courses(settings.database_path, days=120, past_days=120)
+    events = await list_events(settings.database_path, days=120)
     reminders = await list_reminders(settings.database_path)
+    zjut_term = await _load_zjut_term_meta()
 
     from app.services.dashboard_briefing import load_briefing
     briefing = await load_briefing(settings.database_path)
@@ -593,6 +595,7 @@ async def get_schedule_sidebar(request: Request):
         "local_courses": courses_local,
         "events": events,
         "week_events": events,
+        "zjut_term": zjut_term,
         "reminders": reminders,
         "assignments": assignments,
         "memory_insights": memory_insights,
@@ -602,6 +605,33 @@ async def get_schedule_sidebar(request: Request):
             "assignments_stale": assignments_stale,
             "memory_stale": memory_stale,
         },
+    }
+
+
+async def _load_zjut_term_meta() -> dict | None:
+    async with db_conn() as db:
+        row = await (await db.execute(
+            "SELECT semester_label, week1_monday, last_import_at FROM zjut_config WHERE id=1"
+        )).fetchone()
+    if not row:
+        return None
+
+    week1 = row["week1_monday"]
+    current_week = None
+    if week1:
+        try:
+            local_tz = ZoneInfo("Asia/Shanghai")
+            base = datetime.fromisoformat(week1).replace(tzinfo=local_tz)
+            now = datetime.now(timezone.utc).astimezone(local_tz)
+            current_week = max(1, ((now.date() - base.date()).days // 7) + 1)
+        except Exception:
+            current_week = None
+
+    return {
+        "semesterLabel": row["semester_label"],
+        "week1Monday": week1,
+        "currentWeek": current_week,
+        "lastImportAt": row["last_import_at"],
     }
 
 
