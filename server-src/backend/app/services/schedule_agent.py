@@ -20,6 +20,7 @@ STATIC_SYSTEM_PROMPT = """你是 ChatBot 的日程 Agent，负责提醒、日历
 - 常见简称要扩展：计组=计算机组成/计算机组成原理，课设=课程设计。
 - 调查类问题先做 1-3 个关键词宽搜；search_database 最多调用 6 次，不要穷举所有表。
 - 查询默认 brief；用户追问细节、需要核对来源或执行写操作前，再用 get_record_detail。
+- 同一轮里同一个读取工具和同一组参数不要重复调用；已有证据足够时立刻组织回答。
 - 课程表属于本地课程数据，不是 Calendar。查课用 list_courses/search_database，不要把课程误建为日历事件。
 - 写操作只有用户明确要求时才调用；被加入确认队列后，前端按钮负责确认，你只需简短说明将执行什么。
 - 任何创建/更新/完成/删除/保存/推送/导入，必须以工具成功结果为准，不能凭空声称已完成。
@@ -104,9 +105,27 @@ async def run_schedule_agent(
     }
 
     tool_call_counts: dict[str, int] = {}
-    max_tool_calls = {"search_records": 3, "search_database": 6, "get_data_schema": 2, "get_record_detail": 4}
+    tool_result_cache: dict[str, str] = {}
+    max_tool_calls = {
+        "search_records": 3,
+        "search_database": 6,
+        "get_data_schema": 2,
+        "get_record_detail": 4,
+        "get_current_time": 1,
+    }
+    cacheable_tools = {
+        "get_current_time", "get_data_schema", "search_records", "search_database", "get_record_detail",
+        "list_courses", "list_calendar_events", "list_reminders",
+        "read_message_memory", "get_chaoxing_memory", "get_memory_insights",
+        "get_chaoxing_assignments", "read_chaoxing_assignments",
+    }
 
     async def execute_tool(tc):
+        cache_key = ""
+        if tc.name in cacheable_tools:
+            cache_key = f"{tc.name}:{json.dumps(tc.arguments or {}, ensure_ascii=False, sort_keys=True)}"
+            if cache_key in tool_result_cache:
+                return tool_result_cache[cache_key]
         tool_call_counts[tc.name] = tool_call_counts.get(tc.name, 0) + 1
         max_calls = max_tool_calls.get(tc.name)
         if max_calls and tool_call_counts[tc.name] > max_calls:
@@ -118,6 +137,8 @@ async def run_schedule_agent(
             tc, chaoxing_svc, db_path, user_message, provider, model, api_key,
             conversation_id=conversation_id,
         )
+        if cache_key:
+            tool_result_cache[cache_key] = result
         # Collect structured data from read tools
         target = _TOOL_PAYLOAD_MAP.get(tc.name)
         if target:
