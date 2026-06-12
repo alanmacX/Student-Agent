@@ -187,3 +187,126 @@ curl -s -o /dev/null -w '%{http_code}' "$H/api/ideas"           # 无 token 应 
 5. 每阶段打 tag(§2.5)。
 
 **每一步改完都问自己**:本地编译了吗?部署到容器了吗?三端 HEAD 一致吗?真机/双端看过吗?
+
+---
+
+# 附录:逐条任务展开(Codex 按编号执行,每条独立可验收)
+
+> 每条格式:**目标 / 涉及文件 / 怎么测 / 期望 / 失败怎么查与修**。做完一条走 §2 部署+同步+commit,commit 信息带任务号(如 `B3`)。
+> `T=<ACCESS_TOKEN>`、`H=https://hajiqu.xyz`。`jq` 没有就用 `python3 -c`。
+
+## 附录 A — 冒烟(第①层,逐个修绿)
+
+### A1. 全 API 存活 + 鉴权
+- 测:对每个路由各打一条(见 §3 的 curl);再各打一条**不带 token**。
+- 期望:带 token → 200/合理 JSON;不带 → 401(除 `PUBLIC_API_PATHS`)。
+- 失败:`docker logs server-src-backend-1 --since 10m | grep -iE 'error|traceback'` 定位;路由没注册查 `main.py` 的 `include_router`。
+
+### A2. Agent 聊天(SSE)
+- 测:网页 Agent 页发一句;再 `curl -N -X POST "$H/api/schedule/.../chat?token=$T"` 看是否流式返回 `data:`。
+- 期望:逐字流式;待确认操作出"确认/取消"按钮(`pending_confirmation` 事件 → `MessageBubble`)。
+- 失败:401 看 `hooks/useSSEStream.js` 是否带 `Authorization`(本周修过);按钮不出看事件名 `onPendingConfirmation` 是否对得上(本周修过)。
+
+### A3. Hub 四区块
+- 测:网页 Hub;`curl "$H/api/dashboard/today?token=$T"`。
+- 期望:今日plan / 即将 / 长期 / 点子库 / 最近执行都渲染;空数据有空状态文案,不白屏。
+- 失败:看 `routers/dashboard.py` 查询;前端 `components/hub/HubView.jsx`。
+
+### A4. 点子库 CRUD
+- 测:`POST/GET/PATCH/DELETE $H/api/ideas`;网页 Hub 输入框增删。
+- 期望:增删改即时反映;agent 能 `list_ideas` 读到。
+- 失败:`routers/ideas.py`、`HubView.jsx` 的 `loadIdeas/addNote/deleteNote`。
+
+### A5. ZJUT 教务面板
+- 测:设置页「正方教务」(`components/settings/ZjutSettings.jsx`)输学号密码→导入;`curl "$H/api/zjut/status?token=$T"`。
+- 期望:导入成功返回写入条数;status 显示学期标签 + 上次导入时间;Hub「今日课程」出现当天的课。
+- 失败:`routers/zjut.py`、`services/zjut_import.py`;登录失败看 `services/zjut.py` 的 `_login`(CAS 表单/公钥);课不显示先查 §B5 时区。
+
+### A6. 推送订阅 + 收推送
+- 测:设置页 `PushSettings.jsx` 订阅;手动触发一条 `curl -X POST "$H/api/agent/ask?token=$T" -d '{"text":"提醒我5分钟后喝水"}'` 或等 deadline_check。
+- 期望:真机收到通知;点击/划掉后 `notification_log` 有 clicked/dismissed 回执。
+- 失败:`.env` 的 `VAPID_*` 必须有(缺了静默不发);`services/push_service.py`;SW `public/sw.js`。
+
+## 附录 B — 逻辑审计(第②层)
+
+### B1. 作业状态过滤(双词表,全局核)
+- 目标:**只有 `{未交, 未提交}` 算待办**;`待批阅/已批阅/已提交/已完成/已交/已截止` 都算交了,不显示不提醒。
+- 涉及:`memory_sync.py::PENDING_STATUSES`(权威)、`routers/dashboard.py`、`tasks/notification_sender.py`、`services/schedule_agent.py`。
+- 测:`grep -rn "fetch_all_pending_assignments\|status NOT IN\|status IN" backend/app` —— 每个调用点确认都过滤了状态;线上 `curl "$H/api/dashboard/today?token=$T"` 看 assignment 项 `detail` 是否全是"未交"。
+- 失败/修:出现 `NOT IN ('已交','已完成')` 这种(漏"待批阅")→ 改成 `IN ('未交','未提交')` 或 `_is_pending()`。新增显示作业的代码必须复用同一判断。
+
+### B2. 推送去重(不重复轰炸)
+- 目标:同一条目一天不被多渠道重复推。
+- 涉及:`push_service.py::has_notified`(按 `item_id+notif_type` 分渠道命名空间)、`entity_recently_notified`(跨渠道,按 item_id 查 N 小时内)、`memory/dispatch.py::notify_now/schedule_push`(确定性 id)。
+- 测:连续两次跑 `deadline_check` / `distill`,看 `notification_log` 同一 item_id 是否被多次写不同 notif_type;真机一天收几条同一作业的。
+- 失败/修:多渠道捞同一条 → 在各渠道 context 里 `entity_recently_notified(item_id, 24)` 抑制,或排除 `notification_log` 已推的。`schedule_push` 必须用确定性 id(非随机 uuid),否则 `INSERT OR IGNORE` 去重失效。
+
+### B3. 提醒阶梯 + 撤销级联
+- 目标:item 入库即排 T-3/T-1/当天(`ladder.build_ladder`);改期/取消时旧阶梯撤、新阶梯重排。
+- 涉及:`services/ladder.py`(`build_ladder/schedule_ladder_for_item/cancel_ladder_for_item`)、`scheduled_notifications` 表(`source_id={item_id}:{档位}`)、`tasks/ladder_audit.py`(每小时补漏)。
+- 测:造一个 item 改 due → 查 `scheduled_notifications` 旧 source_id 行 `sent_at IS NULL` 是否被删、新行是否生成;停 backend 1h 重启看 `ladder_audit` 是否补齐。
+- 失败/修:撤销用 `DELETE ... WHERE source_id LIKE '{item_id}%' AND sent_at IS NULL`;确认 reconciler 的 `update_item/cancel_item` 执行后调了 `cancel_ladder_for_item`。
+
+### B4. Reconciler 不变量 + external_update(**含一个 TODO**)
+- 目标:① LLM 只能操作上下文给过的 id(校验器拒幻觉 id);② push_now 的 ref 必须真实存在;③ **新增 `external_update` op**:消息语义识别到"教务/正方课表/考试已更新/调课"时,reconciler 输出该 op → 代码推一条"要刷新课表吗"通知(或在确认后调 `/api/zjut/refresh`)。**绝不定时刷新。**
+- 涉及:`services/reconciler.py`(现有 op:new_item/update_item/cancel_item/cancel_course_rows/new_fact/push_now/conflict — **无 external_update,需加**)、`routers/zjut.py::refresh`。
+- 测:给 `inject_message`(debug)投"老师说下周三的课调到周五,教务系统已更新"→ 期望产出 external_update → 收到刷新提示;投普通消息不触发。
+- 失败/修:在 reconciler 输出 schema + 执行器里加 external_update 分支(参考 push_now/conflict 的写法);执行 = `notify_now` 一条带 deep_link 到刷新动作。
+
+### B5. 时间一致性(UTC)
+- 目标:所有 `start_at/end_at/due_at/expires_at` 存 **UTC ISO**;比较用 UTC;展示转本地。
+- 测:`grep -rn "utcnow\|+08:00\|astimezone\|isoformat" backend/app | grep -iE 'start_at|end_at|due_at|expires'`;`sqlite3` 抽查 `server_courses/server_events` 的时间是否带 `+00:00`。
+- 失败/修:写库存了 `+08:00` 字符串 → `.astimezone(timezone.utc)`(本周 `zjut_import._dt` 已修);naive `datetime.utcnow()` → `datetime.now(timezone.utc)`。
+
+### B6. 逾期项标记(**TODO,用户已提**)
+- 目标:未完成但已过期的 `server_reminders` 不混进"今天",接口给 `overdue:true` + 逾期天数,前端单独"逾期"分组标红。
+- 涉及:`routers/dashboard.py`(plan 的 reminders 查询无下界)、`components/hub/HubView.jsx`。
+- 测:造一条 due 在 3 天前未完成的提醒 → 期望出现在"逾期"组标"逾期3天",不在"今天"。
+
+### B7. 防幻觉(口头 vs 真落库)
+- 目标:agent 声称"已创建/已保存/已完成"前必须真调了工具且成功。
+- 测:聊天让 agent "记住X" / "建个提醒",然后查 `user_memory`/`server_reminders` 是否真有行;agent 别在没调工具时说"已保存"。
+- 失败/修:`schedule_agent.py` 的铁律 prompt(已加)+ 确认写操作走待确认队列。
+
+### B8. 过滤误杀/漏报
+- 测:`curl "$H/api/debug/drops?token=$T"`(需 `DEBUG=true`)抽样被丢消息,看有无该 notify 的被误杀;LLM 故障注入看含 ddl/作业/考试关键词的是否兜底为 notify(不是 interest)。
+- 涉及:`dingtalk/filters.py`、`dingtalk/classifier.py`(persona=`DINGTALK_PERSONA`)。
+
+## 附录 C — UI / 易用性(第③层,移动端 + 桌面端各过一遍)
+
+> 每条:窄屏(~390px,真机或 DevTools iPhone)+ 宽屏各验收一次。
+
+### C1. 全局态(每个列表/页面)
+- 空态有文案、加载有骨架/转圈、错误有友好提示(不露 traceback/KeyError);401 统一弹令牌框。
+- 涉及组件:`HubView/ScheduleView/NotificationCenter/ScheduleOverview` 及各 `settings/*`。
+
+### C2. 课程表网格视图(**待建**,照用户截图)
+- 周一~周日列 × 1-12 节行,课程彩色块(课名+教室+老师首字),跨节次合并;底部「第X周 ‹ › 刷新」。
+- 数据:`server_courses` where `calendar_name='正方教务'`,按 `start_at`(转本地)算周次/星期/节次落格;节次时间 `zjut_import.PERIOD_TIMES`。
+- 移动端:列宽压缩或横向滚;桌面:完整网格。放在总览或单独 tab。
+
+### C3. 教务设置面板打磨(`ZjutSettings.jsx` 已存在)
+- 密码 type=password 不回显;导入中 loading + 禁用按钮;成功/失败友好提示;显示上次导入时间 + 「立即刷新」;「保存凭据」开关有说明(加密存储)。
+
+### C4. 时间显示统一
+- 全站本地时区 + 相对时间("还剩3天"/"逾期2天"/"18:30");临期/逾期配色(≤1天红、≤3天橙)。
+
+### C5. 操作反馈
+- 删除/完成/确认乐观更新 + 失败回滚(点子库已做,推广到提醒/事件/通知)。
+
+### C6. 移动端专项
+- 安全区(刘海/底部手势条);输入聚焦不被键盘顶飞;下拉刷新阈值别误触(`App.jsx usePullToRefresh`);底部 TabBar 不被遮。
+- PWA:`setAppBadge`(未处理重要数)、离线开能看缓存 dashboard、`apple-touch-icon`/启动屏、manifest `id`。
+
+### C7. 桌面端专项
+- 宽屏别拉成一条单列;Agent 右侧栏**保持删除**(别复活);可选恢复 ⌘N 等快捷键;MaiMBot **保持移除**(别再 import)。
+
+### C8. 通用难用点排查(自由发挥但记录)
+- 通知点击 deep-link 是否落到正确页;课程/考试详情可点开;长文本截断 + 省略;深色背景对比度;按钮可点区域 ≥44px。
+
+## 附录 D — 验收门槛(每层做完对照)
+
+- **①功能**:附录 A 全绿;后端日志 20 分钟无 traceback;无 token 全 401。
+- **②逻辑**:B1 全局无漏"待批阅";B2 同一条目一天不重复推;B3 改期撤旧排新;B5 时间全 UTC;B4 external_update 通(或明确标注未做);B6 逾期分组。
+- **③UI**:C1 全局态齐;C2 课程表网格上线;移动+桌面各过一遍无明显难用点。
+- 每层完打 tag(`polish-p1/p2/p3`)并 bundle 同步到云端。
