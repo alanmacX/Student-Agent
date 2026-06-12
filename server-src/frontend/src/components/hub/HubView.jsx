@@ -160,7 +160,7 @@ function CommandBand({ data, loading, refreshing, error, nextItem }) {
             {refreshing && <span className="text-xs text-[var(--text-tertiary)]">刷新中</span>}
             {loading && <span className="text-xs text-[var(--text-tertiary)]">加载中</span>}
           </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
             {tiles.map(({ label, value, icon: Icon, danger }) => (
               <div key={label} className="min-w-0 border-t border-[var(--border)] pt-3">
                 <div className="flex items-center gap-2 text-[var(--text-tertiary)]">
