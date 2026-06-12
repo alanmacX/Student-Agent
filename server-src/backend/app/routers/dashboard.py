@@ -62,7 +62,7 @@ async def dashboard_today():
         assignments = await _fetchall(db, """
             SELECT id, course_name, title, due_date, status
             FROM chaoxing_assignments
-            WHERE status NOT IN ('已交', '已完成')
+            WHERE status IN ('未交', '未提交')
               AND (due_date IS NULL OR due_date <= ?)
             ORDER BY due_date IS NULL, due_date ASC
             LIMIT 30
@@ -93,7 +93,7 @@ async def dashboard_today():
         far_assignments = await _fetchall(db, """
             SELECT id, course_name, title, due_date, status
             FROM chaoxing_assignments
-            WHERE status NOT IN ('已交', '已完成')
+            WHERE status IN ('未交', '未提交')
               AND due_date > ? AND due_date <= ?
             ORDER BY due_date ASC
             LIMIT 40

@@ -85,8 +85,11 @@ async def stored_credentials(db_path: str) -> tuple[str, str] | None:
 # ── 展开课表 → server_courses ──────────────────────────────────────────────────
 
 def _dt(date_only: datetime, hhmm: str) -> str:
+    # 统一存 UTC ISO,和 server_reminders/events 及 dashboard 的 UTC 边界一致;
+    # 否则 +08:00 字符串和 +00:00 边界做字典序比较会把昨天的课算进今天。
     h, m = (int(x) for x in hhmm.split(":"))
-    return date_only.replace(hour=h, minute=m, second=0, microsecond=0).isoformat()
+    return (date_only.replace(hour=h, minute=m, second=0, microsecond=0)
+            .astimezone(timezone.utc).isoformat())
 
 
 def expand_courses(courses: list[dict], week1_monday: str) -> list[dict]:
@@ -118,8 +121,8 @@ def parse_exam_time(time_raw: str) -> tuple[str, str] | None:
     if not m:
         return None
     y, mo, d, h1, m1, h2, m2 = (int(x) for x in m.groups())
-    start = datetime(y, mo, d, h1, m1, tzinfo=LOCAL_TZ)
-    end = datetime(y, mo, d, h2, m2, tzinfo=LOCAL_TZ)
+    start = datetime(y, mo, d, h1, m1, tzinfo=LOCAL_TZ).astimezone(timezone.utc)
+    end = datetime(y, mo, d, h2, m2, tzinfo=LOCAL_TZ).astimezone(timezone.utc)
     return start.isoformat(), end.isoformat()
 
 

@@ -6,6 +6,13 @@ from datetime import datetime, time, timedelta, timezone
 from app.services.push_service import send_push_to_all_subscribers, has_notified, log_notification_sent
 import aiosqlite
 
+# 仅"未提交/未交"算待办;已提交/待批阅/已批阅/已完成/已截止都不再提醒。
+_PENDING_STATUSES = {"未交", "未提交"}
+
+
+def _is_pending(a: dict) -> bool:
+    return (a.get("status") or "").strip() in _PENDING_STATUSES
+
 
 async def check_and_send_deadline_notifications(app_state):
     if not app_state.chaoxing_svc.is_logged_in:
@@ -16,6 +23,9 @@ async def check_and_send_deadline_notifications(app_state):
 
     assignments = await app_state.chaoxing_svc.fetch_all_pending_assignments()
     for assignment in assignments:
+        # 只提醒"未提交/未交";已提交、待批阅、已批阅、已完成、已截止都不再打扰。
+        if (assignment.get("status") or "").strip() not in _PENDING_STATUSES:
+            continue
         try:
             due_str = assignment.get("dueDate")
             if not due_str:
@@ -198,7 +208,7 @@ async def _build_daily_begin_context(app_state, now: datetime) -> dict:
     assignments = []
     if app_state.chaoxing_svc.is_logged_in:
         all_assignments = await app_state.chaoxing_svc.fetch_all_pending_assignments()
-        assignments = [a for a in all_assignments if _is_between(a.get("dueDate"), start, end)]
+        assignments = [a for a in all_assignments if _is_pending(a) and _is_between(a.get("dueDate"), start, end)]
 
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
@@ -247,7 +257,7 @@ async def _build_daily_evening_context(app_state, now: datetime) -> dict:
     tomorrow_assignments = []
     if app_state.chaoxing_svc.is_logged_in:
         all_assignments = await app_state.chaoxing_svc.fetch_all_pending_assignments()
-        tomorrow_assignments = [a for a in all_assignments if _is_between(a.get("dueDate"), tomorrow_start, tomorrow_end)]
+        tomorrow_assignments = [a for a in all_assignments if _is_pending(a) and _is_between(a.get("dueDate"), tomorrow_start, tomorrow_end)]
 
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row

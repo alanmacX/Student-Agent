@@ -1932,8 +1932,9 @@ async def _get_schedule_context(chaoxing_svc, db_path: str) -> str:
         for c in courses[:12]:
             parts.append(f"- {c.get('title')} | {c.get('startDate')} - {c.get('endDate')} | {c.get('location') or ''}")
 
-    # Get assignments
+    # Get assignments — 只列未提交/未交的
     assignments = await chaoxing_svc.fetch_all_pending_assignments()
+    assignments = [a for a in assignments if (a.get("status") or "").strip() in ("未交", "未提交")]
     if assignments:
         parts.append("\n## 待完成作业:")
         for a in assignments[:10]:
@@ -2002,6 +2003,8 @@ async def _get_chaoxing_memory(db_path: str, importance_filter: str) -> str:
 
 async def _get_assignments(chaoxing_svc) -> str:
     assignments = await chaoxing_svc.fetch_all_pending_assignments()
+    # 只算"未提交/未交";已提交、待批阅、已完成都算交了,不列。
+    assignments = [a for a in assignments if (a.get("status") or "").strip() in ("未交", "未提交")]
     if not assignments:
         return "暂无待完成作业。"
 
