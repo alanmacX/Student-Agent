@@ -16,7 +16,8 @@ STATIC_SYSTEM_PROMPT = """你是 ChatBot 的日程 Agent，负责提醒、日历
 
 核心规则：
 - 事实回答必须来自工具结果；没有查到就说没查到，不要凭预设 context 或记忆猜。
-- 复杂、跨表、调查类问题优先用 search_database；不确定字段时先用 get_data_schema。
+- 复杂、跨表、调查类问题优先用 search_records 做关键词宽搜；需要精确条件时再用 search_database。
+- 常见简称要扩展：计组=计算机组成/计算机组成原理，课设=课程设计。
 - 调查类问题先做 1-3 个关键词宽搜；search_database 最多调用 6 次，不要穷举所有表。
 - 查询默认 brief；用户追问细节、需要核对来源或执行写操作前，再用 get_record_detail。
 - 课程表属于本地课程数据，不是 Calendar。查课用 list_courses/search_database，不要把课程误建为日历事件。
@@ -103,7 +104,7 @@ async def run_schedule_agent(
     }
 
     tool_call_counts: dict[str, int] = {}
-    max_tool_calls = {"search_database": 6, "get_data_schema": 2, "get_record_detail": 4}
+    max_tool_calls = {"search_records": 3, "search_database": 6, "get_data_schema": 2, "get_record_detail": 4}
 
     async def execute_tool(tc):
         tool_call_counts[tc.name] = tool_call_counts.get(tc.name, 0) + 1
@@ -243,6 +244,21 @@ def _build_schedule_tools() -> list:
                 "properties": {
                     "tables": {"type": "array", "items": {"type": "string"}, "description": "只返回这些表的列名；不传则返回核心表列名"},
                 },
+                "additionalProperties": False,
+            },
+        ),
+        ToolDefinition(
+            name="search_records",
+            description="只读关键词宽搜工具。自动扩展常见简称（如 计组→计算机组成、课设→课程设计），跨核心业务表返回分组结果；调查类问题优先用它。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "用户关键词或自然语言短 query"},
+                    "tables": {"type": "array", "items": {"type": "string"}, "description": "可选，限定搜索表"},
+                    "limit_per_table": {"type": "integer", "description": "每表最多返回行数，默认5，最大10"},
+                    "detail_level": {"type": "string", "enum": ["brief", "detailed"], "description": "默认 brief"},
+                },
+                "required": ["query"],
                 "additionalProperties": False,
             },
         ),
@@ -765,6 +781,16 @@ async def _execute_schedule_tool(
     elif tc.name == "get_data_schema":
         from app.services.agent_data_tools import schema_payload
         return json.dumps(await schema_payload(db_path, tc.arguments.get("tables") or []), ensure_ascii=False, indent=2)
+    elif tc.name == "search_records":
+        from app.services.agent_data_tools import search_records
+        result = await search_records(
+            db_path,
+            query=tc.arguments.get("query", ""),
+            tables=tc.arguments.get("tables") or [],
+            limit_per_table=int(tc.arguments.get("limit_per_table") or 5),
+            detail_level=tc.arguments.get("detail_level") or "brief",
+        )
+        return result.to_json()
     elif tc.name == "search_database":
         from app.services.agent_data_tools import search_database
         result = await search_database(

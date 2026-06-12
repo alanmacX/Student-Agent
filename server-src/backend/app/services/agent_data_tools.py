@@ -57,6 +57,35 @@ DEFAULT_SCHEMA_TABLES = {
     "notification_log",
 }
 
+QUERY_ALIASES: dict[str, list[str]] = {
+    "计组": ["计算机组成", "计算机组成原理", "计算机组成课程设计"],
+    "课设": ["课程设计"],
+    "ddl": ["截止", "截止时间", "作业", "提交"],
+    "DDL": ["截止", "截止时间", "作业", "提交"],
+}
+
+SEARCH_COLUMNS: dict[str, list[str]] = {
+    "chaoxing_memory_entries": ["title", "summary", "action_hint", "kind", "category", "source_type"],
+    "server_reminders": ["title", "notes", "list_name"],
+    "server_events": ["title", "notes", "location", "calendar_name"],
+    "server_courses": ["title", "notes", "location"],
+    "chaoxing_assignments": ["course_name", "title", "status"],
+    "dingtalk_messages": ["sender_name", "conversation_title", "content"],
+    "entities": ["name", "aliases", "notes"],
+    "facts": ["text", "source"],
+}
+
+SEARCH_SELECT_COLUMNS: dict[str, list[str]] = {
+    "chaoxing_memory_entries": ["id", "title", "summary", "action_hint", "importance", "expires_at", "source_type", "created_at"],
+    "server_reminders": ["id", "title", "due_at", "notes", "is_important", "created_at"],
+    "server_events": ["id", "title", "start_at", "end_at", "location", "notes", "calendar_name"],
+    "server_courses": ["id", "title", "start_at", "end_at", "location", "notes"],
+    "chaoxing_assignments": ["id", "course_name", "title", "due_date", "status"],
+    "dingtalk_messages": ["id", "sender_name", "conversation_title", "content", "created_at"],
+    "entities": ["id", "etype", "name", "aliases", "notes", "updated_at"],
+    "facts": ["id", "entity_id", "text", "source", "confidence", "updated_at"],
+}
+
 
 @dataclass
 class SearchResult:
@@ -159,6 +188,52 @@ async def search_database(
     })
 
 
+async def search_records(
+    db_path: str,
+    query: str,
+    tables: list[str] | None = None,
+    limit_per_table: int = 5,
+    detail_level: str = "brief",
+) -> SearchResult:
+    terms = expand_query_terms(query)
+    if not terms:
+        return SearchResult(False, {"ok": False, "error": "query 为空"})
+    requested = {str(t).strip() for t in (tables or []) if str(t).strip()}
+    target_tables = [t for t in SEARCH_COLUMNS if not requested or t in requested]
+    limit_per_table = max(1, min(int(limit_per_table or 5), 10))
+    detail_level = "detailed" if detail_level == "detailed" else "brief"
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        existing_columns = await table_columns(db_path, set(target_tables))
+        for table in target_tables:
+            existing = {col["name"] for col in existing_columns.get(table, [])}
+            search_cols = [c for c in SEARCH_COLUMNS[table] if c in existing and not SENSITIVE_RE.search(c)]
+            select_cols = [c for c in SEARCH_SELECT_COLUMNS[table] if c in existing and not SENSITIVE_RE.search(c)]
+            if not search_cols or not select_cols:
+                continue
+            clauses = []
+            params = []
+            for term in terms:
+                for col in search_cols:
+                    clauses.append(f'"{col}" LIKE ?')
+                    params.append(f"%{term}%")
+            select_sql = ", ".join(f'"{c}"' for c in select_cols)
+            sql = f'SELECT {select_sql} FROM "{table}" WHERE {" OR ".join(clauses)} LIMIT ?'
+            rows = await (await db.execute(sql, (*params, limit_per_table))).fetchall()
+            if rows:
+                grouped[table] = [_clean_row(dict(row), detail_level=detail_level) for row in rows]
+    return SearchResult(True, {
+        "ok": True,
+        "query": query,
+        "expanded_terms": terms,
+        "limit_per_table": limit_per_table,
+        "tables": target_tables,
+        "groups": grouped,
+        "total_rows": sum(len(rows) for rows in grouped.values()),
+    })
+
+
 async def table_columns(db_path: str, tables: set[str] | None = None) -> dict[str, list[dict[str, Any]]]:
     target_tables = tables or set(ALLOWED_TABLES)
     columns: dict[str, list[dict[str, Any]]] = {}
@@ -178,6 +253,26 @@ async def table_columns(db_path: str, tables: set[str] | None = None) -> dict[st
                 })
             columns[table] = clean_cols
     return columns
+
+
+def expand_query_terms(query: str) -> list[str]:
+    raw = (query or "").strip()
+    if not raw:
+        return []
+    terms: list[str] = []
+    for token in re.split(r"[\s,，。；;、/]+", raw):
+        token = token.strip()
+        if len(token) >= 2 and token not in terms:
+            terms.append(token)
+    for key, aliases in QUERY_ALIASES.items():
+        if key in raw:
+            for alias in aliases:
+                if alias not in terms:
+                    terms.append(alias)
+    if raw not in terms and len(raw) <= 40:
+        terms.insert(0, raw)
+    return terms[:12]
+
 
 
 async def get_record_detail(db_path: str, source: str, record_id: str) -> dict[str, Any]:

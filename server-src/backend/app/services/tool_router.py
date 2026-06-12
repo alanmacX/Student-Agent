@@ -8,7 +8,7 @@ from app.database import db_conn
 from app.services.agent_service import AgentMsg, ToolDefinition, agent_complete
 from app.services.provider_registry import resolve_provider
 
-CORE_TOOLS = {"get_current_time", "get_data_schema", "search_database", "get_record_detail"}
+CORE_TOOLS = {"get_current_time", "get_data_schema", "search_records", "search_database", "get_record_detail"}
 READ_FALLBACK = {
     "list_reminders", "list_calendar_events", "list_courses",
     "read_message_memory", "get_chaoxing_assignments", "kb_search",
