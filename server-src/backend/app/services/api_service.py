@@ -94,6 +94,25 @@ def _match_deepseek_cache_pricing(model: str) -> tuple[float, float, float] | No
     return None
 
 
+def estimate_deepseek_cost(
+    model: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_hit_tokens: int = 0,
+    cache_miss_tokens: int = 0,
+) -> float | None:
+    pricing = _match_deepseek_cache_pricing(model)
+    if not pricing:
+        return None
+    hit_rate, miss_rate, output_rate = pricing
+    hit = max(0, int(cache_hit_tokens or 0))
+    miss = max(0, int(cache_miss_tokens or 0))
+    if not miss:
+        miss = max(0, int(input_tokens or 0) - hit)
+    out = max(0, int(output_tokens or 0))
+    return (hit * hit_rate + miss * miss_rate + out * output_rate) / 1_000_000
+
+
 def _match_openrouter_pricing(model: str, provider: str, or_pricing: dict) -> tuple[float, float] | None:
     """Try to match model against OpenRouter pricing dict."""
     if model in or_pricing:
@@ -134,16 +153,15 @@ async def estimate_cost(
         pass
 
     # DeepSeek bills cache hits and cache misses at different input rates.
-    # Prefer provider-specific usage when the API returned cache counters.
-    deepseek_pricing = _match_deepseek_cache_pricing(model)
-    has_cache_breakdown = bool(cache_hit_tokens or cache_miss_tokens)
-    if deepseek_pricing and has_cache_breakdown:
-        hit_rate, miss_rate, output_rate = deepseek_pricing
-        hit = max(0, int(cache_hit_tokens or 0))
-        miss = max(0, int(cache_miss_tokens or 0))
-        if hit and not miss:
-            miss = max(0, int(input_tokens or 0) - hit)
-        return (hit * hit_rate + miss * miss_rate + int(output_tokens or 0) * output_rate) / 1_000_000
+    deepseek_cost = estimate_deepseek_cost(
+        model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_hit_tokens=cache_hit_tokens,
+        cache_miss_tokens=cache_miss_tokens,
+    )
+    if deepseek_cost is not None:
+        return deepseek_cost
 
     # 2. OpenRouter pricing (fuzzy match)
     or_pricing = await fetch_openrouter_pricing()

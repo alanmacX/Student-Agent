@@ -1,6 +1,29 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Trash2, Edit2, RefreshCw, Check, ChevronDown, ChevronUp, Wifi } from "lucide-react";
+import { Plus, Trash2, Edit2, RefreshCw, Check, ChevronUp, Wifi, Calculator } from "lucide-react";
 import { apiFetch } from "../../api/client";
+
+const DEEPSEEK_PRICING = {
+  "deepseek-v4-flash": {
+    label: "V4 Flash",
+    cacheHit: 0.0028,
+    cacheMiss: 0.14,
+    output: 0.28,
+    note: "默认推荐：路由、briefing、日常查询",
+  },
+  "deepseek-v4-pro": {
+    label: "V4 Pro",
+    cacheHit: 0.003625,
+    cacheMiss: 0.435,
+    output: 0.87,
+    note: "复杂推理、长上下文、重要 agent 任务",
+  },
+};
+
+const THINKING_MODES = [
+  { id: "disabled", title: "快 / 省钱", detail: "non-thinking，适合日常查询；路由与 briefing 始终使用此模式。" },
+  { id: "high", title: "稳", detail: "thinking high，适合复杂排查、跨表推理。" },
+  { id: "max", title: "深推理", detail: "thinking max，留给高价值复杂 agent 任务。" },
+];
 
 async function listProviders() {
   const d = await apiFetch("/api/providers");
@@ -29,12 +52,15 @@ export default function ProviderSettings() {
   const [saving, setSaving] = useState(false);
   const [reachability, setReachability] = useState({});
   const [scheduleProviderId, setScheduleProviderId] = useState("xiaomimimo");
+  const [scheduleModel, setScheduleModel] = useState("");
   const [lightProviderId, setLightProviderId] = useState("xiaomimimo");
   const [lightModel, setLightModel] = useState("");
   const [filterProviderId, setFilterProviderId] = useState("xiaomimimo");
   const [filterModel, setFilterModel] = useState("");
   const [deepseekThinking, setDeepseekThinking] = useState("disabled");
   const [deepseekUserId, setDeepseekUserId] = useState("student-agent");
+  const [costModel, setCostModel] = useState("deepseek-v4-flash");
+  const [costInputs, setCostInputs] = useState({ hit: "20000", miss: "5000", output: "1200" });
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -51,6 +77,7 @@ export default function ProviderSettings() {
     apiFetch("/api/settings").then((s) => {
       const scheduleDefault = s.schedule_agent_provider_id || "xiaomimimo";
       setScheduleProviderId(scheduleDefault);
+      setScheduleModel(s.schedule_agent_model || "");
       setLightProviderId(s.light_agent_provider_id || scheduleDefault);
       setLightModel(s.light_agent_model || "");
       setFilterProviderId(s.filter_provider || scheduleDefault);
@@ -74,6 +101,16 @@ export default function ProviderSettings() {
     setEditingId(null);
     setForm(EMPTY_FORM);
   };
+
+  const providerById = useCallback(
+    (id) => providers.find((p) => p.id === id) || providers[0] || null,
+    [providers],
+  );
+
+  const firstModelFor = useCallback(
+    (id) => providerById(id)?.models?.[0] || "",
+    [providerById],
+  );
 
   const handleFetchModels = async () => {
     setFetchingModels(true);
@@ -121,40 +158,56 @@ export default function ProviderSettings() {
   };
 
   const saveScheduleProvider = async (id) => {
+    const nextModel = firstModelFor(id);
     setScheduleProviderId(id);
+    setScheduleModel(nextModel);
     await apiFetch("/api/settings", {
       method: "PUT",
-      body: JSON.stringify({ settings: { schedule_agent_provider_id: id } }),
+      body: JSON.stringify({ settings: { schedule_agent_provider_id: id, schedule_agent_model: nextModel } }),
+    });
+  };
+
+  const saveScheduleModel = async (value) => {
+    setScheduleModel(value);
+    await apiFetch("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ settings: { schedule_agent_model: value } }),
     });
   };
 
   const saveLightProvider = async (id) => {
+    const nextModel = firstModelFor(id);
     setLightProviderId(id);
+    setLightModel(nextModel);
     await apiFetch("/api/settings", {
       method: "PUT",
-      body: JSON.stringify({ settings: { light_agent_provider_id: id } }),
+      body: JSON.stringify({ settings: { light_agent_provider_id: id, light_agent_model: nextModel } }),
     });
   };
 
-  const saveLightModel = async () => {
+  const saveLightModel = async (value) => {
+    setLightModel(value);
     await apiFetch("/api/settings", {
       method: "PUT",
-      body: JSON.stringify({ settings: { light_agent_model: lightModel.trim() } }),
+      body: JSON.stringify({ settings: { light_agent_model: value } }),
     });
   };
 
   const saveFilterProvider = async (id) => {
+    const nextModel = firstModelFor(id);
     setFilterProviderId(id);
+    setFilterModel(nextModel);
     await apiFetch("/api/settings", {
       method: "PUT",
-      body: JSON.stringify({ settings: { filter_provider: id } }),
+      body: JSON.stringify({ settings: { filter_provider: id, filter_model: nextModel } }),
     });
   };
 
-  const saveFilterModel = async () => {
+  const saveFilterModel = async (value) => {
+    setFilterModel(value);
     await apiFetch("/api/settings", {
       method: "PUT",
-      body: JSON.stringify({ settings: { filter_model: filterModel.trim() } }),
+      body: JSON.stringify({ settings: { filter_model: value } }),
     });
   };
 
@@ -174,6 +227,19 @@ export default function ProviderSettings() {
       body: JSON.stringify({ settings: { deepseek_user_id: cleaned } }),
     });
   };
+
+  const pricing = DEEPSEEK_PRICING[costModel] || DEEPSEEK_PRICING["deepseek-v4-flash"];
+  const hitTokens = Math.max(0, Number(costInputs.hit) || 0);
+  const missTokens = Math.max(0, Number(costInputs.miss) || 0);
+  const outputTokens = Math.max(0, Number(costInputs.output) || 0);
+  const estimatedCost = (
+    hitTokens * pricing.cacheHit +
+    missTokens * pricing.cacheMiss +
+    outputTokens * pricing.output
+  ) / 1_000_000;
+  const cacheSavings = missTokens + hitTokens > 0
+    ? (hitTokens * (pricing.cacheMiss - pricing.cacheHit)) / 1_000_000
+    : 0;
 
   return (
     <div className="stagger max-w-2xl space-y-4">
@@ -269,102 +335,59 @@ export default function ProviderSettings() {
         </div>
       )}
 
-      <div className="ui-card p-5 space-y-2">
-        <p className="text-sm font-semibold text-white">Schedule Agent Provider</p>
-        <select
-          value={scheduleProviderId}
-          onChange={(e) => saveScheduleProvider(e.target.value)}
-          className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none"
-        >
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-        <p className="text-xs text-[var(--text-tertiary)]">
-          日程 Agent 使用这个 Provider 处理对话。
-        </p>
-      </div>
+      <AgentModelCard
+        title="Schedule Agent"
+        description="处理日程对话、数据库工具调用和写操作确认。"
+        providers={providers}
+        providerId={scheduleProviderId}
+        model={scheduleModel}
+        onProviderChange={saveScheduleProvider}
+        onModelChange={saveScheduleModel}
+      />
 
-      <div className="ui-card p-5 space-y-3">
-        <div>
-          <p className="text-sm font-semibold text-white">Light Router / Briefing Agent</p>
-          <p className="mt-1 text-xs text-[var(--text-tertiary)]">
-            用于工具清单选择和首页轻量 briefing；建议选快且便宜的模型，留空则用 Provider 默认模型。
-          </p>
-        </div>
-        <select
-          value={lightProviderId}
-          onChange={(e) => saveLightProvider(e.target.value)}
-          className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none"
-        >
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-        <div className="flex gap-2">
-          <input
-            value={lightModel}
-            onChange={(e) => setLightModel(e.target.value)}
-            onBlur={saveLightModel}
-            placeholder="例如 gpt-4o-mini / qwen-flash；留空用默认"
-            className="min-h-10 min-w-0 flex-1 rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white placeholder-[var(--text-tertiary)] focus:outline-none"
-          />
-          <button
-            onClick={saveLightModel}
-            className="rounded-2xl border border-[var(--border)] px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--hover-bg)]"
-          >
-            保存
-          </button>
-        </div>
-      </div>
+      <AgentModelCard
+        title="Light Router / Briefing"
+        description="工具清单选择和首页 briefing。建议用 DeepSeek V4 Flash 这类低延迟模型。"
+        providers={providers}
+        providerId={lightProviderId}
+        model={lightModel}
+        onProviderChange={saveLightProvider}
+        onModelChange={saveLightModel}
+      />
 
-      <div className="ui-card p-5 space-y-3">
-        <p className="text-sm font-semibold text-white">Filter Provider</p>
-        <select
-          value={filterProviderId}
-          onChange={(e) => saveFilterProvider(e.target.value)}
-          className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none"
-        >
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-        <div className="flex gap-2">
-          <input
-            value={filterModel}
-            onChange={(e) => setFilterModel(e.target.value)}
-            onBlur={saveFilterModel}
-            placeholder="留空则用 provider 默认模型"
-            className="min-h-10 min-w-0 flex-1 rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white placeholder-[var(--text-tertiary)] focus:outline-none"
-          />
-          <button
-            onClick={saveFilterModel}
-            className="rounded-2xl border border-[var(--border)] px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--hover-bg)]"
-          >
-            保存
-          </button>
-        </div>
-      </div>
+      <AgentModelCard
+        title="Filter"
+        description="钉钉/学习通过滤与轻量分类。优先选便宜、稳定、速度快的模型。"
+        providers={providers}
+        providerId={filterProviderId}
+        model={filterModel}
+        onProviderChange={saveFilterProvider}
+        onModelChange={saveFilterModel}
+      />
 
       <div className="ui-card p-5 space-y-3">
         <div>
           <p className="text-sm font-semibold text-white">DeepSeek Optimizations</p>
           <p className="mt-1 text-xs text-[var(--text-tertiary)]">
-            路由和 briefing 固定使用 non-thinking；主对话可按需开启 V4 thinking，DeepSeek user_id 用于缓存与调度隔离。
+            路由和 briefing 固定 non-thinking；主 Agent 可按任务价值开启 thinking。花费按 cache hit / cache miss / output 分开计算。
           </p>
         </div>
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-[var(--text-tertiary)]">主 Agent thinking</span>
-          <select
-            value={deepseekThinking}
-            onChange={(e) => saveDeepseekThinking(e.target.value)}
-            className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none"
-          >
-            <option value="disabled">Disabled - 低延迟/低成本</option>
-            <option value="high">High - 复杂问题更稳</option>
-            <option value="max">Max - 深推理/复杂 agent</option>
-          </select>
-        </label>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {THINKING_MODES.map((mode) => (
+            <button
+              key={mode.id}
+              onClick={() => saveDeepseekThinking(mode.id)}
+              className={`min-h-[94px] rounded-2xl border px-3 py-2 text-left transition ${
+                deepseekThinking === mode.id
+                  ? "border-[var(--accent)] bg-[var(--accent)]/12 text-white"
+                  : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-secondary)] hover:border-[var(--accent)]/60"
+              }`}
+            >
+              <span className="block text-sm font-semibold">{mode.title}</span>
+              <span className="mt-1 block text-xs leading-5 text-[var(--text-tertiary)]">{mode.detail}</span>
+            </button>
+          ))}
+        </div>
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-[var(--text-tertiary)]">DeepSeek user_id</span>
           <div className="flex gap-2">
@@ -384,7 +407,117 @@ export default function ProviderSettings() {
           </div>
           <p className="mt-1 text-xs text-[var(--text-tertiary)]">只能包含字母、数字、短横线和下划线；不要填真实身份信息。</p>
         </label>
+
+        <div className="space-y-3 border-t border-[var(--border)] pt-4">
+          <div className="flex items-center gap-2">
+            <Calculator size={15} className="text-[var(--accent)]" />
+            <p className="text-sm font-semibold text-white">DeepSeek 花费估算</p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-4">
+            <label className="block sm:col-span-1">
+              <span className="mb-1 block text-xs text-[var(--text-tertiary)]">模型</span>
+              <select
+                value={costModel}
+                onChange={(e) => setCostModel(e.target.value)}
+                className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none"
+              >
+                {Object.entries(DEEPSEEK_PRICING).map(([model, data]) => (
+                  <option key={model} value={model}>{data.label}</option>
+                ))}
+              </select>
+            </label>
+            <CostInput label="Cache hit" value={costInputs.hit} onChange={(value) => setCostInputs((prev) => ({ ...prev, hit: value }))} />
+            <CostInput label="Cache miss" value={costInputs.miss} onChange={(value) => setCostInputs((prev) => ({ ...prev, miss: value }))} />
+            <CostInput label="Output" value={costInputs.output} onChange={(value) => setCostInputs((prev) => ({ ...prev, output: value }))} />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Metric label="估算费用" value={`$${estimatedCost.toFixed(6)}`} tone="text-yellow-300" />
+            <Metric label="缓存节省" value={`$${cacheSavings.toFixed(6)}`} tone="text-emerald-300" />
+            <Metric label="模型定位" value={pricing.note} tone="text-white" />
+          </div>
+          <div className="grid gap-1.5 text-xs text-[var(--text-tertiary)]">
+            {Object.entries(DEEPSEEK_PRICING).map(([model, data]) => (
+              <p key={model}>
+                <span className="text-[var(--text-secondary)]">{data.label}</span>
+                {" "}hit ${data.cacheHit}/1M · miss ${data.cacheMiss}/1M · output ${data.output}/1M
+              </p>
+            ))}
+          </div>
+        </div>
       </div>
+    </div>
+  );
+}
+
+function AgentModelCard({ title, description, providers, providerId, model, onProviderChange, onModelChange }) {
+  const provider = providers.find((p) => p.id === providerId) || providers[0] || {};
+  const models = provider.models || [];
+  const effectiveModel = model || models[0] || "";
+  const hasLegacyModel = effectiveModel && !models.includes(effectiveModel);
+
+  return (
+    <div className="ui-card p-5 space-y-3">
+      <div>
+        <p className="text-sm font-semibold text-white">{title}</p>
+        <p className="mt-1 text-xs text-[var(--text-tertiary)]">{description}</p>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--text-tertiary)]">Provider</span>
+          <select
+            value={providerId}
+            onChange={(e) => onProviderChange(e.target.value)}
+            className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none"
+          >
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--text-tertiary)]">Model</span>
+          <select
+            value={effectiveModel}
+            onChange={(e) => onModelChange(e.target.value)}
+            disabled={!models.length && !hasLegacyModel}
+            className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none disabled:opacity-50"
+          >
+            {!models.length && <option value="">先获取模型列表</option>}
+            {hasLegacyModel && <option value={effectiveModel}>{effectiveModel}</option>}
+            {models.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <p className="text-xs text-[var(--text-tertiary)]">
+        当前：{provider.name || "Provider"} / <span className="text-[var(--text-secondary)]">{effectiveModel || "未配置模型"}</span>
+      </p>
+    </div>
+  );
+}
+
+function CostInput({ label, value, onChange }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs text-[var(--text-tertiary)]">{label}</span>
+      <input
+        type="number"
+        min="0"
+        inputMode="numeric"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none"
+      />
+    </label>
+  );
+}
+
+function Metric({ label, value, tone }) {
+  return (
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
+      <p className="text-[10px] uppercase tracking-wide text-[var(--text-tertiary)]">{label}</p>
+      <p className={`mt-1 text-sm font-semibold tabular-nums ${tone}`}>{value}</p>
     </div>
   );
 }

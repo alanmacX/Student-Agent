@@ -299,11 +299,15 @@ async def _resolve_schedule_provider():
             "SELECT value FROM settings WHERE key='schedule_agent_provider_id'"
         )).fetchone()
         provider_id = provider_id_row["value"] if provider_id_row else "openai"
+        model_row = await (await db.execute(
+            "SELECT value FROM settings WHERE key='schedule_agent_model'"
+        )).fetchone()
+        schedule_model = model_row["value"] if model_row and model_row["value"] else ""
         sched_provider = await (await db.execute(
             "SELECT value FROM settings WHERE key='schedule_agent_provider'"
         )).fetchone()
     provider, api_key = await resolve_provider(provider_id)
-    model = (provider.get("models") or ["gpt-4o-mini"])[0]
+    model = schedule_model or (provider.get("models") or ["gpt-4o-mini"])[0]
     if sched_provider:
         try:
             prov_data = json.loads(sched_provider[0])

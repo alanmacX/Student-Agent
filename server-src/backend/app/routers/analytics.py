@@ -7,7 +7,12 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Request
 from app.database import db_conn
-from app.services.api_service import estimate_cost, KNOWN_PRICING
+from app.services.api_service import (
+    DEEPSEEK_CACHE_PRICING,
+    KNOWN_PRICING,
+    estimate_cost,
+    estimate_deepseek_cost,
+)
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -235,7 +240,16 @@ async def list_pricing():
     # Merge: user > KNOWN_PRICING > OpenRouter
     result = {}
     for model, (inp, out) in KNOWN_PRICING.items():
-        result[model] = {"input_rate": inp, "output_rate": out, "source": "builtin"}
+        item = {"input_rate": inp, "output_rate": out, "source": "builtin"}
+        if model in DEEPSEEK_CACHE_PRICING:
+            hit, miss, output = DEEPSEEK_CACHE_PRICING[model]
+            item.update({
+                "cache_hit_input_rate": hit,
+                "cache_miss_input_rate": miss,
+                "output_rate": output,
+                "source": "builtin-deepseek",
+            })
+        result[model] = item
     for model, (inp, out) in or_pricing.items():
         if model not in result:
             result[model] = {"input_rate": inp, "output_rate": out, "source": "openrouter"}
@@ -243,6 +257,35 @@ async def list_pricing():
         result[model] = data  # user overrides everything
 
     return {"pricing": result, "total": len(result)}
+
+
+@router.get("/deepseek/pricing")
+async def deepseek_pricing():
+    return {
+        "unit": "USD per 1M tokens",
+        "models": {
+            model: {
+                "cache_hit_input_rate": rates[0],
+                "cache_miss_input_rate": rates[1],
+                "output_rate": rates[2],
+            }
+            for model, rates in DEEPSEEK_CACHE_PRICING.items()
+        },
+    }
+
+
+@router.post("/deepseek/cost")
+async def deepseek_cost(request: Request):
+    body = await request.json()
+    model = str(body.get("model") or "deepseek-v4-flash")
+    cost = estimate_deepseek_cost(
+        model,
+        input_tokens=int(body.get("input_tokens") or 0),
+        output_tokens=int(body.get("output_tokens") or 0),
+        cache_hit_tokens=int(body.get("cache_hit_tokens") or 0),
+        cache_miss_tokens=int(body.get("cache_miss_tokens") or 0),
+    )
+    return {"model": model, "cost_usd": round(cost or 0, 8)}
 
 
 @router.put("/pricing/{model:path}")

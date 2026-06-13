@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Coins, TrendingUp, MessageSquare, Bot } from "lucide-react";
+import { Coins, TrendingUp, MessageSquare, Bot, Database, Gauge } from "lucide-react";
 import { fetchTokenAnalytics } from "../../api/analytics";
 
 const PERIODS = [
@@ -50,6 +50,7 @@ export default function TokenStats() {
   }
 
   const { totals, daily } = data;
+  const byModel = data.by_model || {};
 
   // Find max total tokens for bar scaling
   const maxTokens = Math.max(...daily.map(d => d.total.input_tokens + d.total.output_tokens), 1);
@@ -75,20 +76,42 @@ export default function TokenStats() {
       </div>
 
       {/* Stat cards */}
-      <div className="flex gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {[
           { icon: Coins, label: "总 Tokens", value: (totals.input_tokens + totals.output_tokens).toLocaleString(), color: "text-white" },
           { icon: TrendingUp, label: "预估费用", value: `$${totals.cost_usd.toFixed(4)}`, color: "text-yellow-400" },
           { icon: MessageSquare, label: "输入", value: totals.input_tokens.toLocaleString(), color: "text-blue-400" },
           { icon: Bot, label: "输出", value: totals.output_tokens.toLocaleString(), color: "text-emerald-400" },
+          { icon: Database, label: "Cache Hit", value: (totals.cache_hit_tokens || 0).toLocaleString(), color: "text-cyan-300" },
+          { icon: Gauge, label: "Reasoning", value: (totals.reasoning_tokens || 0).toLocaleString(), color: "text-purple-300" },
         ].map(({ icon: Icon, label, value, color }) => (
-          <div key={label} className="flex-1 rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-center">
+          <div key={label} className="min-w-0 rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-center">
             <Icon size={14} className={`mx-auto mb-1 ${color}`} />
             <p className={`text-sm font-bold tabular-nums ${color}`}>{value}</p>
             <p className="text-[10px] text-[var(--text-tertiary)]">{label}</p>
           </div>
         ))}
       </div>
+
+      {Object.keys(byModel).length > 0 && (
+        <div className="space-y-1.5 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3">
+          <p className="text-xs font-semibold text-[var(--text-secondary)]">按模型花费</p>
+          {Object.entries(byModel).map(([model, item]) => (
+            <div key={model} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 text-xs">
+              <span className="truncate text-white">{model}</span>
+              <span className="tabular-nums text-[var(--text-tertiary)]">
+                {((item.input_tokens || 0) + (item.output_tokens || 0)).toLocaleString()} tok
+              </span>
+              <span className="tabular-nums text-yellow-300">${(item.cost_usd || 0).toFixed(4)}</span>
+              {((item.cache_hit_tokens || 0) > 0 || (item.cache_miss_tokens || 0) > 0) && (
+                <span className="col-span-3 text-[10px] text-[var(--text-tertiary)]">
+                  cache hit {(item.cache_hit_tokens || 0).toLocaleString()} · miss {(item.cache_miss_tokens || 0).toLocaleString()}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Daily bar chart */}
       <div className="space-y-1.5">

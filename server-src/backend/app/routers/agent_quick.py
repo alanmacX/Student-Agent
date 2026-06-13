@@ -62,19 +62,23 @@ async def _resolve_schedule_provider():
             "SELECT value FROM settings WHERE key='schedule_agent_provider_id'"
         )).fetchone()
         provider_id = pid_row["value"] if pid_row else "openai"
+        model_row = await (await db.execute(
+            "SELECT value FROM settings WHERE key='schedule_agent_model'"
+        )).fetchone()
+        schedule_model = model_row["value"] if model_row and model_row["value"] else ""
         sched = await (await db.execute(
             "SELECT value FROM settings WHERE key='schedule_agent_provider'"
         )).fetchone()
 
     provider, api_key = await resolve_provider(provider_id)
-    model = (provider.get("models") or ["gpt-4o-mini"])[0]
-    if provider.get("id") == "openai":
+    model = schedule_model or (provider.get("models") or ["gpt-4o-mini"])[0]
+    if provider.get("id") == "openai" and not schedule_model:
         model = "gpt-4o-mini"
     if not api_key and provider.get("id") == "openai":
         fp, fk = await resolve_provider("xiaomimimo")
         if fk:
             provider, api_key = fp, fk
-            model = (provider.get("models") or ["mimo-v2.5-pro"])[0]
+            model = schedule_model or (provider.get("models") or ["mimo-v2.5-pro"])[0]
     if sched:
         try:
             d = json.loads(sched[0])

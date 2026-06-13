@@ -59,6 +59,11 @@ export default function TokenSummary() {
         <p className="text-sm font-bold tabular-nums text-yellow-400">
           ${today.cost_usd.toFixed(4)}
         </p>
+        {(today.cache_hit_tokens || today.cache_miss_tokens) ? (
+          <p className="text-[10px] tabular-nums text-[var(--text-tertiary)]">
+            hit {(today.cache_hit_tokens || 0).toLocaleString()}
+          </p>
+        ) : null}
       </div>
       {yestTotal > 0 && todayTotal > 0 && (
         <div className={`flex items-center gap-0.5 ${deltaColor}`}>

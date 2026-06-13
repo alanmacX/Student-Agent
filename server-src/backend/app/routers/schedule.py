@@ -392,6 +392,10 @@ async def stream_schedule_chat(request: Request):
             "SELECT value FROM settings WHERE key='schedule_agent_provider_id'"
         )).fetchone()
         provider_id = provider_id_row["value"] if provider_id_row else "openai"
+        model_row = await (await db.execute(
+            "SELECT value FROM settings WHERE key='schedule_agent_model'"
+        )).fetchone()
+        schedule_model = model_row["value"] if model_row and model_row["value"] else ""
 
         # Check if custom schedule provider is configured
         sched_provider = await (await db.execute(
@@ -399,15 +403,15 @@ async def stream_schedule_chat(request: Request):
         )).fetchone()
 
     provider, api_key = await resolve_provider(provider_id)
-    model = (provider.get("models") or ["gpt-4o-mini"])[0]
+    model = schedule_model or (provider.get("models") or ["gpt-4o-mini"])[0]
 
-    if provider.get("id") == "openai":
+    if provider.get("id") == "openai" and not schedule_model:
         model = "gpt-4o-mini"
     if not api_key and provider.get("id") == "openai":
         fallback_provider, fallback_key = await resolve_provider("xiaomimimo")
         if fallback_key:
             provider, api_key = fallback_provider, fallback_key
-            model = (provider.get("models") or ["mimo-v2.5-pro"])[0]
+            model = schedule_model or (provider.get("models") or ["mimo-v2.5-pro"])[0]
 
     if sched_provider:
         try:
@@ -644,19 +648,23 @@ async def _resolve_schedule_provider():
             "SELECT value FROM settings WHERE key='schedule_agent_provider_id'"
         )).fetchone()
         provider_id = provider_id_row["value"] if provider_id_row else "openai"
+        model_row = await (await db.execute(
+            "SELECT value FROM settings WHERE key='schedule_agent_model'"
+        )).fetchone()
+        schedule_model = model_row["value"] if model_row and model_row["value"] else ""
         sched_provider = await (await db.execute(
             "SELECT value FROM settings WHERE key='schedule_agent_provider'"
         )).fetchone()
 
     provider, api_key = await resolve_provider(provider_id)
-    model = (provider.get("models") or ["gpt-4o-mini"])[0]
-    if provider.get("id") == "openai":
+    model = schedule_model or (provider.get("models") or ["gpt-4o-mini"])[0]
+    if provider.get("id") == "openai" and not schedule_model:
         model = "gpt-4o-mini"
     if not api_key and provider.get("id") == "openai":
         fallback_provider, fallback_key = await resolve_provider("xiaomimimo")
         if fallback_key:
             provider, api_key = fallback_provider, fallback_key
-            model = (provider.get("models") or ["mimo-v2.5-pro"])[0]
+            model = schedule_model or (provider.get("models") or ["mimo-v2.5-pro"])[0]
     if sched_provider:
         try:
             prov_data = json.loads(sched_provider[0])
