@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCw, Sparkles, BookOpen, CalendarClock, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { RefreshCw, BookOpen, CalendarClock, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { fetchScheduleSidebar, refreshBriefing } from "../../api/schedule";
 import StatusStrip from "./StatusStrip";
 import TokenSummary from "./TokenSummary";
@@ -35,7 +35,6 @@ export default function ScheduleOverview() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshingOverview, setRefreshingOverview] = useState(false);
-  const [refreshingBriefing, setRefreshingBriefing] = useState(false);
   const pollRef = useRef(null);
   const dataRef = useRef(null);
 
@@ -50,8 +49,8 @@ export default function ScheduleOverview() {
       const d = await fetchScheduleSidebar();
       dataRef.current = d;
       setData(d);
-      // If no briefing yet, kick off generation and poll for it.
-      if (!d?.briefing?.text) {
+      // If todos haven't been generated yet, kick off generation and poll for it.
+      if (!d?.briefing?.generated_at) {
         startBriefingPoll();
       }
     } catch (e) {
@@ -74,7 +73,7 @@ export default function ScheduleOverview() {
       tries += 1;
       try {
         const d = await fetchScheduleSidebar();
-        if (d?.briefing?.text || tries > 10) {
+        if (d?.briefing?.generated_at || tries > 10) {
           dataRef.current = d;
           setData(d);
           clearInterval(pollRef.current);
@@ -84,24 +83,6 @@ export default function ScheduleOverview() {
         /* ignore */
       }
     }, 3000);
-  };
-
-  const handleRefreshBriefing = async () => {
-    setRefreshingBriefing(true);
-    try {
-      const result = await refreshBriefing();
-      if (result?.briefing) {
-        setData((prev) => {
-          const next = prev ? { ...prev, briefing: result.briefing } : prev;
-          dataRef.current = next;
-          return next;
-        });
-      }
-    } catch (e) {
-      console.error("Failed to refresh briefing:", e);
-    } finally {
-      setRefreshingBriefing(false);
-    }
   };
 
   useEffect(() => {
@@ -155,8 +136,6 @@ export default function ScheduleOverview() {
             data={data}
             loading={loading}
             pendingCount={pendingAssignments.length}
-            onRefreshBriefing={handleRefreshBriefing}
-            refreshingBriefing={refreshingBriefing}
           />
           <StatusStrip />
           <TokenSummary />
@@ -176,17 +155,16 @@ export default function ScheduleOverview() {
   );
 }
 
-// ── Today card: big hero + LLM-decided todo list, all in one ──────────────────
-function TodayCard({ data, loading, pendingCount, onRefreshBriefing, refreshingBriefing }) {
+// ── Today card: date hero + LLM-decided todo list, all in one ─────────────────
+function TodayCard({ data, loading, pendingCount }) {
   const now = new Date();
   const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
   const weekdayName = weekdays[now.getDay()];
   const dateStr = now.toLocaleDateString("zh-CN", { month: "long", day: "numeric" });
 
   const briefing = data?.briefing;
-  const briefingText = briefing?.text;
   // Still on the way: no briefing object yet, or actively loading the first one.
-  const generating = !briefingText && (loading || data === null || !briefing);
+  const generating = !briefing?.generated_at && (loading || data === null || !briefing);
 
   // Prefer the LLM-decided todos; gracefully fall back to rule-ranked insights.
   const todos = useMemo(() => {
@@ -207,60 +185,42 @@ function TodayCard({ data, loading, pendingCount, onRefreshBriefing, refreshingB
       }}
     >
       {/* Date row */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-end justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/75">
             {weekdayName}
           </p>
           <p className="mt-0.5 text-[34px] font-bold leading-none tracking-tight text-white">{dateStr}</p>
         </div>
-        <div className="ml-3 mt-0.5 flex items-center gap-2">
-          <button
-            onClick={onRefreshBriefing}
-            disabled={refreshingBriefing || generating}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-[14px] bg-white/10 text-white/70 backdrop-blur-md transition-all hover:bg-white/20 hover:text-white active:scale-90 disabled:opacity-40"
-            aria-label="重新生成摘要"
-          >
-            <RefreshCw size={14} className={refreshingBriefing ? "animate-spin" : ""} />
-          </button>
-          <div className="grid h-11 w-11 shrink-0 place-items-center rounded-[18px] bg-white/15 backdrop-blur-md">
-            <Sparkles size={21} className={`text-white ${generating ? "animate-pulse-soft" : ""}`} />
-          </div>
-        </div>
-      </div>
-
-      {/* Natural-language briefing */}
-      <div className="mt-5 min-h-[52px]">
-        {generating ? (
-          <OnTheWay />
-        ) : (
-          <p key={briefingText} className="animate-fade text-[16px] leading-relaxed text-white/90">
-            {briefingText || "今天没有特别紧急的事项，放轻松。"}
-          </p>
-        )}
-      </div>
-
-      {/* Quick stat chip */}
-      {!generating && pendingCount > 0 && (
-        <div className="mt-4 flex flex-wrap gap-2">
-          <span className="flex items-center gap-1.5 rounded-full bg-orange-500/15 px-3.5 py-1.5 text-[12px] font-semibold text-orange-400 ring-1 ring-orange-500/25">
+        {pendingCount > 0 && (
+          <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/15 px-3.5 py-1.5 text-[12px] font-semibold text-white ring-1 ring-white/20 backdrop-blur-md">
             <BookOpen size={12} />
             {pendingCount} 个作业待交
           </span>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* LLM-decided todo list — lives inside the card */}
-      {!generating && todos.length > 0 && (
-        <div className="mt-5 space-y-2">
-          <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/60">
-            该先做这些
+      <div className="mt-6">
+        <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/60">
+          该先做这些
+        </p>
+        {generating ? (
+          <div className="mt-3">
+            <OnTheWay />
+          </div>
+        ) : todos.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {todos.map((t, idx) => (
+              <TodoRow key={`${t.title}-${idx}`} todo={t} delay={idx * 60} />
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 text-[15px] leading-relaxed text-white/80">
+            今天没有需要优先处理的事，放轻松。
           </p>
-          {todos.map((t, idx) => (
-            <TodoRow key={`${t.title}-${idx}`} todo={t} delay={idx * 60} />
-          ))}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -317,7 +277,7 @@ function TodoRow({ todo, delay }) {
   );
 }
 
-// "在来的路上" — shown while the briefing is being generated.
+// Shown while the todo list is being generated.
 function OnTheWay() {
   return (
     <div className="flex items-center gap-2.5 text-[15px] text-white/85">
@@ -330,7 +290,7 @@ function OnTheWay() {
           />
         ))}
       </span>
-      <span className="animate-fade">今天的重点在来的路上…</span>
+      <span className="animate-fade">正在挑出今天该先做的…</span>
     </div>
   );
 }

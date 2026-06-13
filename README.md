@@ -12,7 +12,7 @@ v2 的核心变化：不再把 48 小时上下文硬塞进 prompt，也不再用
 
 Agent 链路分成两层：
 
-- **Light Router / Briefing Agent**：便宜、快，只负责两件事：给当前 query 选择最小工具清单；在 dashboard 数据 hash 变化时生成一句 briefing 和最多 5 个行动项。
+- **Light Router / Briefing Agent**：便宜、快，只负责两件事：给当前 query 选择最小工具清单；在 dashboard 数据 hash 变化时生成最多 5 个行动项（todo）。首页不再渲染自然语言总结句，只保留「该先做这些」列表。
 - **Detailed Schedule Agent**：负责真实回答和执行。它拿到 light router 给的工具清单后，通过工具主动拉取证据，不再依赖预注入的大块 context。
 
 这里不是“两个数据库工具模式”。真正的工具面是：
@@ -91,7 +91,7 @@ python3 scripts/token_compare.py \
 
 - `schedule_agent.STATIC_SYSTEM_PROMPT`：主 agent 行为约束。现在保持短 prompt，要求事实来自工具结果，不再塞业务上下文。
 - `tool_router.select_tools_for_query()`：light router，只输出工具名 JSON。这里要避免写“回答用户”类指令。
-- `dashboard_v2._briefing_system_prompt()`：首页轻 briefing，只基于输入 JSON 输出结构化摘要。
+- `dashboard_v2._briefing_system_prompt()`：首页轻 briefing，只基于输入 JSON 输出结构化 todo 列表（不再输出自然语言总结句）。
 - 同步/过滤类 prompt：学习通 memory 提炼、钉钉过滤、standby push 决策。它们仍是各自模块的局部 prompt，不参与 schedule chat 的 context 注入。
 
 Prompt 维护原则：主 agent 要少背规则，多看证据；router 要少选工具；dashboard briefing 要短、可缓存、可失败回退。

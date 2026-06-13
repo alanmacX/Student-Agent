@@ -17,7 +17,6 @@ from app.services.time_utils import LOCAL_TZ, local_day_window, parse_any_time, 
 from app.services.tool_router import resolve_light_agent_provider
 
 _HASH_KEY = "dashboard_v2_hash"
-_TEXT_KEY = "dashboard_v2_briefing_text"
 _TODOS_KEY = "dashboard_v2_briefing_todos"
 _TS_KEY = "dashboard_v2_briefing_at"
 _IN_FLIGHT: set[str] = set()
@@ -224,8 +223,8 @@ def dashboard_hash(payload: dict[str, Any]) -> str:
 async def load_briefing(db_path: str) -> dict[str, Any]:
     async with aiosqlite.connect(db_path) as db:
         rows = await (await db.execute(
-            "SELECT key, value FROM chaoxing_sync_state WHERE key IN (?,?,?,?)",
-            (_HASH_KEY, _TEXT_KEY, _TODOS_KEY, _TS_KEY),
+            "SELECT key, value FROM chaoxing_sync_state WHERE key IN (?,?,?)",
+            (_HASH_KEY, _TODOS_KEY, _TS_KEY),
         )).fetchall()
     kv = {k: v for k, v in rows}
     todos = []
@@ -236,7 +235,6 @@ async def load_briefing(db_path: str) -> dict[str, Any]:
             todos = []
     return {
         "hash": kv.get(_HASH_KEY),
-        "text": kv.get(_TEXT_KEY),
         "todos": todos,
         "generated_at": kv.get(_TS_KEY),
     }
@@ -260,23 +258,21 @@ async def refresh_briefing(db_path: str, payload: dict[str, Any] | None = None, 
         )
         if response.usage:
             log_usage_later(db_path, "dashboard_briefing", provider.get("id", ""), model, response.usage)
-        text, todos = _parse_briefing_json(response.text or "")
-        if not text:
+        todos = _parse_briefing_json(response.text or "")
+        if not todos:
             raise ValueError("empty briefing")
     except Exception:
-        fallback = _fallback_briefing(payload)
-        text, todos = fallback["text"], fallback["todos"]
+        todos = _fallback_briefing(payload)
     now_iso = to_utc_iso(utc_now())
     async with aiosqlite.connect(db_path) as db:
         for key, value in (
             (_HASH_KEY, content_hash),
-            (_TEXT_KEY, text),
             (_TODOS_KEY, json.dumps(todos, ensure_ascii=False)),
             (_TS_KEY, now_iso),
         ):
             await db.execute("INSERT OR REPLACE INTO chaoxing_sync_state (key, value) VALUES (?,?)", (key, value))
         await db.commit()
-    return {"hash": content_hash, "text": text, "todos": todos, "generated_at": now_iso}
+    return {"hash": content_hash, "todos": todos, "generated_at": now_iso}
 
 
 def _schedule_refresh(db_path: str, payload: dict[str, Any], content_hash: str) -> None:
@@ -373,25 +369,24 @@ def _brief_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _briefing_system_prompt() -> str:
     return (
-        "你是轻量 dashboard briefing agent。只基于输入 json，总结今天重点。"
+        "你是轻量 dashboard todo agent。只基于输入 json，挑出今天该先做的事。"
         "输出严格 json，不要 Markdown。"
-        "示例 json：{\"briefing\":\"一句自然中文\",\"todos\":[{\"title\":\"短标题\",\"detail\":\"一句理由\",\"when\":\"时间线索\",\"urgency\":\"high|medium|low\"}]}。"
-        "最多 5 个 todos；不要编造输入里没有的事项。"
+        "示例 json：{\"todos\":[{\"title\":\"短标题\",\"detail\":\"一句理由\",\"when\":\"时间线索\",\"urgency\":\"high|medium|low\"}]}。"
+        "最多 5 个 todos；按紧急度排序；不要编造输入里没有的事项。"
     )
 
 
-def _parse_briefing_json(raw: str) -> tuple[str, list]:
+def _parse_briefing_json(raw: str) -> list:
     start = raw.find("{")
     end = raw.rfind("}")
     if start >= 0 and end > start:
         try:
             obj = json.loads(raw[start:end + 1])
-            text = (obj.get("briefing") or "").strip()
             todos = obj.get("todos") if isinstance(obj.get("todos"), list) else []
-            return text, [_clean_todo(t) for t in todos[:5] if isinstance(t, dict) and t.get("title")]
+            return [_clean_todo(t) for t in todos[:5] if isinstance(t, dict) and t.get("title")]
         except json.JSONDecodeError:
             pass
-    return raw.strip(), []
+    return []
 
 
 def _clean_todo(todo: dict[str, Any]) -> dict[str, str]:
@@ -407,12 +402,10 @@ def _clean_todo(todo: dict[str, Any]) -> dict[str, str]:
 
 
 def _briefing_or_fallback(cached: dict[str, Any]) -> dict[str, Any]:
-    if cached.get("text"):
-        return {"text": cached.get("text"), "todos": cached.get("todos") or [], "generated_at": cached.get("generated_at")}
-    return {"text": "今天的重点正在整理。", "todos": [], "generated_at": None}
+    return {"todos": cached.get("todos") or [], "generated_at": cached.get("generated_at")}
 
 
-def _fallback_briefing(payload: dict[str, Any]) -> dict[str, Any]:
+def _fallback_briefing(payload: dict[str, Any]) -> list:
     candidates = (payload.get("overdue") or []) + (payload.get("plan") or []) + (payload.get("upcoming") or [])
     todos = []
     for item in candidates[:5]:
@@ -422,5 +415,4 @@ def _fallback_briefing(payload: dict[str, Any]) -> dict[str, Any]:
             "when": item.get("due_at") or item.get("start_at") or "",
             "urgency": "high" if item.get("overdue") or item.get("importance") == "high" else "medium",
         })
-    text = "今天没有特别紧急的事项。" if not todos else f"今天有 {len(todos)} 件事值得优先看。"
-    return {"text": text, "todos": todos}
+    return todos

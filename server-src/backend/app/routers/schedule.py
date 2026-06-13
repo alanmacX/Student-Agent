@@ -899,8 +899,8 @@ async def _resolve_schedule_provider():
 
 @router.post("/refresh-briefing")
 async def refresh_briefing():
-    """Force the dashboard briefing (natural-language summary + LLM todo list) to
-    regenerate, then return it. Used by the overview when no briefing exists yet."""
+    """Force the dashboard todo list to regenerate, then return it. Used by the
+    overview when no briefing todos exist yet."""
     from app.services.dashboard_v2 import refresh_briefing
     briefing = await refresh_briefing(settings.database_path)
     return {"briefing": briefing}
