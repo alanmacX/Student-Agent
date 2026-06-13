@@ -16,6 +16,12 @@ READ_FALLBACK = {
 }
 HEAVY_RAW_TOOLS = {"read_dingtalk_messages", "get_chaoxing_messages"}
 WRITE_HINT_RE = re.compile(r"(提醒我|创建|新建|添加|删除|删掉|完成|改成|更新|取消|安排|推送|记住|保存|导入)", re.I)
+REFERENCE_MUTATION_RE = re.compile(
+    r"(删除|删掉|移除|清掉|完成|标记完成|改成|更新|取消).*(都|全部|全都|这些|它们|上面|刚才|那几个|这几个|这个|那个)|"
+    r"(都|全部|全都|这些|它们|上面|刚才|那几个|这几个).*(删除|删掉|移除|清掉|完成|标记完成|改成|更新|取消)",
+    re.I,
+)
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 RAW_MESSAGE_HINT_RE = re.compile(r"(钉钉|DingTalk|群聊|私聊|聊天记录|原文|原始消息|学习通消息|消息列表)", re.I)
 DB_HINT_RE = re.compile(r"(数据库|SQL|select|where|表结构|字段|schema|统计|聚合|精确条件|due_at|created_at|updated_at)", re.I)
 SCHEDULE_FACT_HINT_RE = re.compile(r"(今天|明天|后天|本周|下周|ddl|DDL|通知|课程?|上课|作业|提醒|日程|安排|验收|截止)", re.I)
@@ -99,12 +105,14 @@ async def select_tools_for_query(
             selected = _fallback_tool_names(user_message, tools)
         selected = _drop_database_tools_without_hint(user_message, selected)
         selected = _augment_schedule_read_tools(user_message, selected, tools)
+        selected = _augment_mutation_resolution_tools(user_message, selected, tools)
         selected = _drop_heavy_raw_tools(user_message, selected)
         return selected, usage
     except Exception as exc:
         selected = _fallback_tool_names(user_message, tools)
         selected = _drop_database_tools_without_hint(user_message, selected)
         selected = _augment_schedule_read_tools(user_message, selected, tools)
+        selected = _augment_mutation_resolution_tools(user_message, selected, tools)
         return _drop_heavy_raw_tools(user_message, selected), {"phase": "tool_router", "error": str(exc)[:200]}
 
 
@@ -153,6 +161,33 @@ def _augment_schedule_read_tools(user_message: str, selected: list[str], tools: 
     for tool in tools:
         if tool.name in wanted and tool.name not in merged:
             merged.append(tool.name)
+    return merged
+
+
+def _augment_mutation_resolution_tools(user_message: str, selected: list[str], tools: list[ToolDefinition]) -> list[str]:
+    text = user_message or ""
+    if not WRITE_HINT_RE.search(text):
+        return selected
+    if UUID_RE.search(text):
+        return selected
+    selected_set = set(selected)
+    if not (
+        REFERENCE_MUTATION_RE.search(text)
+        or any(name in selected_set for name in ("delete_reminder", "update_reminder", "complete_reminder", "delete_calendar_event", "update_calendar_event"))
+    ):
+        return selected
+
+    available = {t.name for t in tools}
+    wanted: list[str] = []
+    if ("事件" in text or "日历" in text or "会议" in text) and "list_calendar_events" in available:
+        wanted.append("list_calendar_events")
+    if ("提醒" in text or "ddl" in text.lower() or not wanted) and "list_reminders" in available:
+        wanted.append("list_reminders")
+
+    merged = list(selected)
+    for name in wanted:
+        if name not in merged:
+            merged.append(name)
     return merged
 
 

@@ -22,6 +22,7 @@ STATIC_SYSTEM_PROMPT = """你是 ChatBot 的日程 Agent，负责提醒、日历
 - 查询默认 brief；用户追问细节、需要核对来源或执行写操作前，再用 get_record_detail。
 - 同一轮里同一个读取工具和同一组参数不要重复调用；已有证据足够时立刻组织回答。
 - 课程表属于本地课程数据，不是 Calendar。查课用 list_courses/search_database，不要把课程误建为日历事件。
+- 近期历史里可能包含【上一轮结构化结果】JSON；用户说“这些/它们/都/上面那些”时，优先使用其中的 id 和标题解析指代。删除、更新等写操作仍必须进入确认队列。
 - 写操作只有用户明确要求时才调用；被加入确认队列后，前端按钮负责确认，你只需简短说明将执行什么。
 - 任何创建/更新/完成/删除/保存/推送/导入，必须以工具成功结果为准，不能凭空声称已完成。
 - 时间必须带时区；用户没给时区时按 Asia/Shanghai 解析。
@@ -1461,6 +1462,11 @@ async def _store_pending_mutation(db_path: str, tool_name: str, arguments: dict,
         db_path, _pending_key(conversation_id),
         json.dumps(items, ensure_ascii=False),
     )
+
+
+async def queue_pending_mutation(db_path: str, tool_name: str, arguments: dict, conversation_id: str = "default") -> None:
+    """Public wrapper for deterministic routes that still use the normal confirm flow."""
+    await _store_pending_mutation(db_path, tool_name, arguments, conversation_id)
 
 
 async def get_pending_mutations(db_path: str, conversation_id: str = "default") -> list[dict]:

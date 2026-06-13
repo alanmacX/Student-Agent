@@ -12,6 +12,7 @@ from app.services.schedule_agent import (
     execute_confirmed_pending_mutation,
     execute_pending_mutations,
     clear_pending_mutations,
+    queue_pending_mutation,
     run_schedule_agent,
 )
 from app.config import settings
@@ -122,6 +123,189 @@ async def _ensure_session_exists(db, session_id: str, now: str):
             (session_id, "新对话", now, now),
         )
         await db.commit()
+
+
+def _truncate_text(value, limit: int = 120) -> str:
+    text = str(value or "").strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _compact_payload_value(value):
+    if isinstance(value, str):
+        return _truncate_text(value)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (dict, list)):
+        try:
+            return _truncate_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")), 180)
+        except TypeError:
+            return _truncate_text(value, 180)
+    return _truncate_text(value)
+
+
+def _pick_payload_items(items, keys: tuple[str, ...], limit: int = 8) -> list[dict]:
+    out: list[dict] = []
+    if not isinstance(items, list):
+        return out
+    for item in items[:limit]:
+        if not isinstance(item, dict):
+            continue
+        compact: dict = {}
+        for key in keys:
+            value = item.get(key)
+            if value is None or value == "":
+                continue
+            compact[key] = _compact_payload_value(value)
+        if compact:
+            out.append(compact)
+    return out
+
+
+def _compact_schedule_payload_context(payload_json: str | None) -> str:
+    """Turn saved UI payload into a short model-visible id map for follow-ups."""
+    if not payload_json:
+        return ""
+    try:
+        payload = json.loads(payload_json)
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+
+    compact: dict[str, list[dict]] = {}
+    field_map: dict[str, tuple[str, ...]] = {
+        "reminders": ("id", "title", "dueDate", "isCompleted", "isImportant", "listName"),
+        "events": ("id", "title", "startDate", "endDate", "calendarName", "location"),
+        "courses": ("id", "title", "name", "startDate", "endDate", "location", "teacher"),
+        "chaoxing_assignments": ("id", "course_name", "courseName", "title", "due_date", "dueDate", "status"),
+        "chaoxing_messages": ("id", "title", "importance", "expires_at", "summary", "action_hint"),
+        "actions": ("tool", "arguments", "result"),
+    }
+    for key, fields in field_map.items():
+        picked = _pick_payload_items(payload.get(key), fields)
+        if picked:
+            compact[key] = picked
+    if not compact:
+        return ""
+    return (
+        "【上一轮结构化结果】以下 JSON 来自上一轮 UI 卡片，可用于解析“这些/它们/都/上面那些”等追问；"
+        "执行写操作时使用其中的 id，并仍然走确认队列：\n"
+        f"{json.dumps(compact, ensure_ascii=False, separators=(',', ':'))}"
+    )
+
+
+def _history_message_with_payload(row: dict) -> dict:
+    content = row.get("content") or ""
+    payload_context = _compact_schedule_payload_context(row.get("schedule_payload_json"))
+    if payload_context:
+        content = f"{content}\n\n{payload_context}" if content else payload_context
+    return {"role": row.get("role"), "content": content}
+
+
+def _parse_payload_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    return parsed
+
+
+def _latest_payload_from_rows(rows: list[dict]) -> tuple[dict, str] | None:
+    for row in rows:
+        if row.get("role") != "assistant" or not row.get("schedule_payload_json"):
+            continue
+        try:
+            payload = json.loads(row.get("schedule_payload_json") or "")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            return payload, row.get("content") or ""
+    return None
+
+
+def _plan_recent_payload_delete(user_message: str, rows_desc: list[dict], now: datetime | None = None) -> dict | None:
+    """Resolve very narrow bulk follow-up deletes from the most recent payload.
+
+    This intentionally avoids the old broad keyword pre-filter: it only fires on
+    pronoun-like bulk delete requests after an assistant message with structured
+    payload IDs. The actual delete remains pending until the user confirms.
+    """
+    text = (user_message or "").strip()
+    if not text or not any(word in text for word in ("删", "删除", "删掉", "移除", "清掉")):
+        return None
+    if not any(word in text for word in ("都", "全部", "全都", "这些", "它们", "它俩", "上面", "刚才", "那几个", "这几个")):
+        return None
+
+    latest = _latest_payload_from_rows(rows_desc)
+    if not latest:
+        return None
+    payload, assistant_content = latest
+    reminders = payload.get("reminders")
+    if not isinstance(reminders, list):
+        return None
+
+    candidates = [
+        item for item in reminders
+        if isinstance(item, dict) and item.get("id") and not item.get("isCompleted")
+    ]
+    if not candidates:
+        return None
+
+    now = now or datetime.now(ZoneInfo("Asia/Shanghai"))
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    talks_about_expired = "过期" in text or "已到期" in assistant_content or "过期" in assistant_content
+    expired = []
+    if talks_about_expired:
+        for item in candidates:
+            due = _parse_payload_datetime(item.get("dueDate"))
+            if due and due <= now:
+                expired.append(item)
+    if expired:
+        candidates = expired
+
+    seen: set[str] = set()
+    targets: list[dict] = []
+    for item in candidates:
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id in seen:
+            continue
+        seen.add(item_id)
+        targets.append(item)
+
+    if not targets:
+        return None
+
+    mutations = [
+        {"tool": "delete_reminder", "arguments": {"id": str(item["id"])}}
+        for item in targets
+    ]
+    titles = "、".join(_truncate_text(item.get("title"), 24) for item in targets if item.get("title"))
+    qualifier = "已过期" if expired else "上一轮列出的"
+    text = f"将删除 {len(targets)} 条{qualifier}提醒"
+    if titles:
+        text += f"：{titles}"
+    text += "。请点击确认执行。"
+    return {
+        "text": text,
+        "mutations": mutations,
+        "payload": {"reminders": targets},
+    }
+
+
+async def _queue_recent_payload_delete_plan(db_path: str, session_id: str, plan: dict) -> None:
+    for item in plan.get("mutations") or []:
+        if not isinstance(item, dict):
+            continue
+        tool = item.get("tool")
+        arguments = item.get("arguments") or {}
+        if tool and isinstance(arguments, dict):
+            await queue_pending_mutation(db_path, tool, arguments, session_id)
 
 
 async def _handle_slash_command(cmd: str, db_path: str, chaoxing_svc) -> tuple[str, dict | None]:
@@ -316,10 +500,11 @@ async def stream_schedule_chat(request: Request):
         # V2 keeps only a short verbatim window; durable facts must be queried
         # via tools instead of carried as ever-growing chat context.
         history_rows = await (await db.execute(
-            "SELECT role, content FROM schedule_messages WHERE session_id=? ORDER BY position DESC LIMIT 12",
+            "SELECT role, content, schedule_payload_json FROM schedule_messages WHERE session_id=? ORDER BY position DESC LIMIT 12",
             (session_id,),
         )).fetchall()
-        history = list(reversed([dict(r) for r in history_rows]))
+        raw_history_rows_desc = [dict(r) for r in history_rows]
+        history = [_history_message_with_payload(r) for r in reversed(raw_history_rows_desc)]
 
     # ── Slash command router (zero LLM) ───────────────────────────────────────
     if user_message.startswith("/"):
@@ -368,6 +553,42 @@ async def stream_schedule_chat(request: Request):
 
         return StreamingResponse(
             generate_confirmed(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    recent_delete_plan = _plan_recent_payload_delete(user_message, raw_history_rows_desc)
+    if recent_delete_plan:
+        await _queue_recent_payload_delete_plan(settings.database_path, session_id, recent_delete_plan)
+
+        async def generate_recent_payload_delete():
+            nonlocal next_pos
+            text = recent_delete_plan["text"]
+            payload = recent_delete_plan.get("payload") or None
+            tools = [
+                item.get("tool", "")
+                for item in (recent_delete_plan.get("mutations") or [])
+                if isinstance(item, dict)
+            ]
+            yield f"data: {json.dumps({'type': 'text', 'content': text}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'pending_confirmation', 'tool': tools[0] if tools else '', 'tools': tools, 'count': len(tools)}, ensure_ascii=False)}\n\n"
+            if payload:
+                yield f"data: {json.dumps({'type': 'schedule_payload', **payload}, ensure_ascii=False)}\n\n"
+            async with db_conn() as db:
+                payload_json = json.dumps(payload, ensure_ascii=False) if payload else None
+                await db.execute(
+                    "INSERT INTO schedule_messages (id, session_id, role, content, schedule_payload_json, timestamp, position) VALUES (?,?,?,?,?,?,?)",
+                    (str(uuid.uuid4()), session_id, "assistant", text, payload_json, datetime.now(timezone.utc).isoformat(), next_pos),
+                )
+                await db.commit()
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        return StreamingResponse(
+            generate_recent_payload_delete(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
