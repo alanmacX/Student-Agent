@@ -254,6 +254,9 @@ async def refresh_briefing(db_path: str, payload: dict[str, Any] | None = None, 
                 AgentMsg(role="user", content=json.dumps(_brief_payload(payload), ensure_ascii=False)),
             ],
             [], provider, model, api_key,
+            response_format={"type": "json_object"},
+            max_tokens=768,
+            thinking_enabled=False,
         )
         if response.usage:
             log_usage_later(db_path, "dashboard_briefing", provider.get("id", ""), model, response.usage)
@@ -366,8 +369,9 @@ def _brief_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _briefing_system_prompt() -> str:
     return (
-        "你是轻量 dashboard briefing agent。只基于输入 JSON，总结今天重点。"
-        "输出严格 JSON：{\"briefing\":\"一句自然中文\",\"todos\":[{\"title\":\"短标题\",\"detail\":\"一句理由\",\"when\":\"时间线索\",\"urgency\":\"high|medium|low\"}]}。"
+        "你是轻量 dashboard briefing agent。只基于输入 json，总结今天重点。"
+        "输出严格 json，不要 Markdown。"
+        "示例 json：{\"briefing\":\"一句自然中文\",\"todos\":[{\"title\":\"短标题\",\"detail\":\"一句理由\",\"when\":\"时间线索\",\"urgency\":\"high|medium|low\"}]}。"
         "最多 5 个 todos；不要编造输入里没有的事项。"
     )
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
+import asyncio
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, Optional
 import httpx
 import json
+import re
 
 @dataclass
 class UsageStats:
@@ -60,12 +62,33 @@ KNOWN_PRICING: dict[str, tuple[float, float]] = {
     "mimo-v2.5-pro": (0.50, 2.00),
 }
 
+DEEPSEEK_CACHE_PRICING: dict[str, tuple[float, float, float]] = {
+    # (cache_hit_input, cache_miss_input, output) USD per 1M tokens.
+    "deepseek-chat": (0.0028, 0.14, 0.28),
+    "deepseek-reasoner": (0.0028, 0.14, 0.28),
+    "deepseek-v4-flash": (0.0028, 0.14, 0.28),
+    "deepseek-v4-pro": (0.003625, 0.435, 0.87),
+}
+
+
+DEEPSEEK_RETRY_STATUSES = {429, 500, 502, 503, 504}
+
 
 def _match_known_pricing(model: str) -> tuple[float, float] | None:
     pricing = KNOWN_PRICING.get(model)
     if pricing:
         return pricing
     for known, prices in KNOWN_PRICING.items():
+        if model.startswith(known) or known.startswith(model):
+            return prices
+    return None
+
+
+def _match_deepseek_cache_pricing(model: str) -> tuple[float, float, float] | None:
+    pricing = DEEPSEEK_CACHE_PRICING.get(model)
+    if pricing:
+        return pricing
+    for known, prices in DEEPSEEK_CACHE_PRICING.items():
         if model.startswith(known) or known.startswith(model):
             return prices
     return None
@@ -87,7 +110,14 @@ def _match_openrouter_pricing(model: str, provider: str, or_pricing: dict) -> tu
     return None
 
 
-async def estimate_cost(model: str, input_tokens: int, output_tokens: int, provider: str = "") -> float | None:
+async def estimate_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    provider: str = "",
+    cache_hit_tokens: int = 0,
+    cache_miss_tokens: int = 0,
+) -> float | None:
     """Estimate cost in USD. Tries: 1) user override, 2) OpenRouter, 3) KNOWN_PRICING."""
     from .pricing_service import fetch_openrouter_pricing
     from app.database import db_conn
@@ -102,6 +132,18 @@ async def estimate_cost(model: str, input_tokens: int, output_tokens: int, provi
             return (input_tokens * row["input_rate"] + output_tokens * row["output_rate"]) / 1_000_000
     except Exception:
         pass
+
+    # DeepSeek bills cache hits and cache misses at different input rates.
+    # Prefer provider-specific usage when the API returned cache counters.
+    deepseek_pricing = _match_deepseek_cache_pricing(model)
+    has_cache_breakdown = bool(cache_hit_tokens or cache_miss_tokens)
+    if deepseek_pricing and has_cache_breakdown:
+        hit_rate, miss_rate, output_rate = deepseek_pricing
+        hit = max(0, int(cache_hit_tokens or 0))
+        miss = max(0, int(cache_miss_tokens or 0))
+        if hit and not miss:
+            miss = max(0, int(input_tokens or 0) - hit)
+        return (hit * hit_rate + miss * miss_rate + int(output_tokens or 0) * output_rate) / 1_000_000
 
     # 2. OpenRouter pricing (fuzzy match)
     or_pricing = await fetch_openrouter_pricing()
@@ -202,12 +244,77 @@ def _balance_url(base_url: str, api_type: str = "") -> str:
     return _endpoint_url(base_url, path)
 
 
-def _apply_deepseek_options(body: dict, model: str, base_url: str, thinking_enabled: bool = False) -> None:
+def _deepseek_user_id(value: str | None = None) -> str:
+    if value is None:
+        try:
+            from app.config import settings
+            value = settings.deepseek_user_id
+        except Exception:
+            value = ""
+    cleaned = re.sub(r"[^a-zA-Z0-9\-_]+", "-", (value or "student-agent").strip())
+    cleaned = cleaned.strip("-_") or "student-agent"
+    return cleaned[:512]
+
+
+async def resolve_deepseek_runtime_options() -> dict[str, str]:
+    try:
+        from app.config import settings
+        user_id = settings.deepseek_user_id
+    except Exception:
+        user_id = "student-agent"
+    thinking = "disabled"
+    try:
+        from app.database import db_conn
+        async with db_conn() as db:
+            rows = await (await db.execute(
+                "SELECT key, value FROM settings WHERE key IN ('deepseek_user_id', 'deepseek_agent_thinking')"
+            )).fetchall()
+        for row in rows:
+            if row["key"] == "deepseek_user_id" and row["value"]:
+                user_id = row["value"]
+            elif row["key"] == "deepseek_agent_thinking" and row["value"]:
+                thinking = row["value"]
+    except Exception:
+        pass
+    thinking = thinking if thinking in {"disabled", "high", "max"} else "disabled"
+    return {"user_id": _deepseek_user_id(user_id), "thinking": thinking}
+
+
+def _apply_deepseek_options(
+    body: dict,
+    model: str,
+    base_url: str,
+    thinking_enabled: bool = False,
+    reasoning_effort: str = "high",
+    user_id: str | None = None,
+) -> None:
     if not _is_deepseek_base(base_url):
         return
     body["thinking"] = {"type": "enabled" if thinking_enabled else "disabled"}
     if thinking_enabled:
-        body["reasoning_effort"] = "high"
+        body["reasoning_effort"] = "max" if reasoning_effort == "max" else "high"
+    body["user_id"] = _deepseek_user_id(user_id)
+
+
+async def post_json_with_retries(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict,
+    body: dict,
+    *,
+    retry_deepseek: bool = False,
+    attempts: int = 3,
+) -> httpx.Response:
+    for attempt in range(max(1, attempts)):
+        response = await client.post(url, headers=headers, json=body)
+        if (
+            not retry_deepseek
+            or response.status_code not in DEEPSEEK_RETRY_STATUSES
+            or attempt >= attempts - 1
+        ):
+            return response
+        await asyncio.sleep(0.6 * (2 ** attempt))
+    return response
 
 
 def _check_http(response: httpx.Response):
@@ -224,13 +331,15 @@ async def stream_openai(
     model: str,
     api_key: str,
     base_url: str = "https://api.openai.com",
-    thinking_enabled: bool = False,
+    thinking_enabled: bool | None = None,
 ) -> AsyncGenerator[StreamEvent, None]:
     client = get_http_client()
     url = _chat_completion_url(base_url)
     headers = _openai_auth_headers(api_key, base_url)
     headers["Content-Type"] = "application/json"
     is_mimo = _is_xiaomi_mimo(base_url)
+    is_deepseek = _should_send_deepseek_thinking(model, base_url)
+    deepseek_options = await resolve_deepseek_runtime_options() if is_deepseek else {"user_id": "", "thinking": "disabled"}
 
     body = {
         "model": model,
@@ -243,8 +352,18 @@ async def stream_openai(
     else:
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
-    if _should_send_deepseek_thinking(model, base_url):
-        _apply_deepseek_options(body, model, base_url, thinking_enabled)
+    if is_deepseek:
+        mode = deepseek_options["thinking"]
+        enabled = thinking_enabled if thinking_enabled is not None else mode in {"high", "max"}
+        effort = "max" if mode == "max" else "high"
+        _apply_deepseek_options(
+            body,
+            model,
+            base_url,
+            bool(enabled),
+            reasoning_effort=effort,
+            user_id=deepseek_options["user_id"],
+        )
 
     if is_mimo:
         resp = await client.post(url, headers=headers, json=body)

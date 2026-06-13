@@ -10,6 +10,7 @@ import httpx
 class AgentMsg:
     role: str  # "system" | "user" | "assistant" | "tool"
     content: str | None = None
+    reasoning_content: str | None = None
     tool_calls: list["ToolCall"] | None = None
     tool_call_id: str | None = None
     tool_name: str | None = None
@@ -32,6 +33,7 @@ class ToolCall:
 @dataclass
 class AgentResponse:
     text: Optional[str]
+    reasoning_content: Optional[str]
     tool_calls: list[ToolCall]
     usage: Optional[Any]
     stop_reason: str  # "end_turn" | "tool_use" | "max_tokens"
@@ -44,6 +46,10 @@ async def agent_complete(
     model: str,
     api_key: str,
     thinking_budget: int = 0,
+    response_format: dict[str, Any] | None = None,
+    max_tokens: int | None = None,
+    thinking_enabled: bool | None = None,
+    reasoning_effort: str = "high",
 ) -> AgentResponse:
     from .api_service import get_http_client, _endpoint_url, _openai_auth_headers, UsageStats
 
@@ -53,7 +59,18 @@ async def agent_complete(
     if api_type == "anthropic":
         return await _anthropic_agent_complete(messages, tools, model, api_key, base_url, thinking_budget)
     else:
-        return await _openai_agent_complete(messages, tools, model, api_key, base_url)
+        return await _openai_agent_complete(
+            messages,
+            tools,
+            model,
+            api_key,
+            base_url,
+            thinking_budget=thinking_budget,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            thinking_enabled=thinking_enabled,
+            reasoning_effort=reasoning_effort,
+        )
 
 
 async def _anthropic_agent_complete(messages, tools, model, api_key, base_url, thinking_budget) -> AgentResponse:
@@ -99,6 +116,7 @@ async def _anthropic_agent_complete(messages, tools, model, api_key, base_url, t
 
     return AgentResponse(
         text=text,
+        reasoning_content=None,
         tool_calls=tool_calls,
         usage=usage,
         stop_reason=data.get("stop_reason", "end_turn"),
@@ -136,7 +154,18 @@ def _anthropic_message(message: AgentMsg) -> dict[str, Any]:
     return {"role": message.role, "content": message.content or ""}
 
 
-async def _openai_agent_complete(messages, tools, model, api_key, base_url) -> AgentResponse:
+async def _openai_agent_complete(
+    messages,
+    tools,
+    model,
+    api_key,
+    base_url,
+    thinking_budget: int = 0,
+    response_format: dict[str, Any] | None = None,
+    max_tokens: int | None = None,
+    thinking_enabled: bool | None = None,
+    reasoning_effort: str = "high",
+) -> AgentResponse:
     from .api_service import (
         get_http_client,
         _chat_completion_url,
@@ -145,6 +174,8 @@ async def _openai_agent_complete(messages, tools, model, api_key, base_url) -> A
         _apply_deepseek_options,
         _is_deepseek_base,
         _parse_openai_usage,
+        post_json_with_retries,
+        resolve_deepseek_runtime_options,
     )
 
     client = get_http_client()
@@ -167,22 +198,47 @@ async def _openai_agent_complete(messages, tools, model, api_key, base_url) -> A
         "model": model,
         "messages": [_openai_message(m) for m in messages],
     }
+    if response_format and not is_mimo:
+        body["response_format"] = response_format
     if is_mimo:
         body["stream"] = False
         # 2048 is enough for tool calls + agent responses; 8192 was bloating latency
-        body["max_completion_tokens"] = 2048
+        body["max_completion_tokens"] = max_tokens or 2048
         body["chat_template_kwargs"] = {"enable_thinking": False}
     elif is_deepseek:
         body["stream"] = False
-        body["max_tokens"] = 2048
-        _apply_deepseek_options(body, model, base_url, thinking_enabled=False)
+        body["max_tokens"] = max_tokens or 2048
+        deepseek_options = await resolve_deepseek_runtime_options()
+        configured_mode = deepseek_options["thinking"]
+        deepseek_thinking = (
+            thinking_enabled
+            if thinking_enabled is not None
+            else (thinking_budget > 0 or configured_mode in {"high", "max"})
+        )
+        effort = "max" if reasoning_effort == "max" or thinking_budget >= 8192 or configured_mode == "max" else "high"
+        _apply_deepseek_options(
+            body,
+            model,
+            base_url,
+            thinking_enabled=bool(deepseek_thinking),
+            reasoning_effort=effort,
+            user_id=deepseek_options["user_id"],
+        )
+    elif max_tokens:
+        body["max_tokens"] = max_tokens
     if oai_tools:
         body["tools"] = oai_tools
         body["tool_choice"] = "auto"
     headers = _openai_auth_headers(api_key, base_url)
     headers["Content-Type"] = "application/json"
 
-    resp = await client.post(_chat_completion_url(base_url), headers=headers, json=body)
+    resp = await post_json_with_retries(
+        client,
+        _chat_completion_url(base_url),
+        headers,
+        body,
+        retry_deepseek=is_deepseek,
+    )
     print(f"[AGENT] LLM response status={resp.status_code}", flush=True)
     if resp.status_code == 401 and is_mimo and api_key:
         print(f"[AGENT] 401 mimo retry with bearer auth", flush=True)
@@ -198,6 +254,7 @@ async def _openai_agent_complete(messages, tools, model, api_key, base_url) -> A
     choice = data["choices"][0]
     msg = choice["message"]
     text = msg.get("content")
+    reasoning_content = msg.get("reasoning_content")
     tool_calls = []
     for tc in msg.get("tool_calls") or []:
         raw_args = tc["function"].get("arguments", {})
@@ -213,12 +270,20 @@ async def _openai_agent_complete(messages, tools, model, api_key, base_url) -> A
     usage = _parse_openai_usage(data.get("usage", {}))
 
     stop_reason = "tool_use" if tool_calls else "end_turn"
-    return AgentResponse(text=text, tool_calls=tool_calls, usage=usage, stop_reason=stop_reason)
+    return AgentResponse(
+        text=text,
+        reasoning_content=reasoning_content,
+        tool_calls=tool_calls,
+        usage=usage,
+        stop_reason=stop_reason,
+    )
 
 
 def _openai_message(message: AgentMsg) -> dict[str, Any]:
     if message.role == "assistant":
         data: dict[str, Any] = {"role": "assistant", "content": message.content or ""}
+        if message.reasoning_content:
+            data["reasoning_content"] = message.reasoning_content
         if message.tool_calls:
             data["tool_calls"] = [
                 {
@@ -332,6 +397,7 @@ async def run_agentic_loop(
         intra_turn.append(AgentMsg(
             role="assistant",
             content=response.text,
+            reasoning_content=response.reasoning_content,
             tool_calls=response.tool_calls,
         ))
         for tc, result in zip(response.tool_calls, results):

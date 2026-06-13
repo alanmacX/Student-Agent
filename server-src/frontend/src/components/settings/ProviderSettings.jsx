@@ -33,6 +33,8 @@ export default function ProviderSettings() {
   const [lightModel, setLightModel] = useState("");
   const [filterProviderId, setFilterProviderId] = useState("xiaomimimo");
   const [filterModel, setFilterModel] = useState("");
+  const [deepseekThinking, setDeepseekThinking] = useState("disabled");
+  const [deepseekUserId, setDeepseekUserId] = useState("student-agent");
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -53,6 +55,8 @@ export default function ProviderSettings() {
       setLightModel(s.light_agent_model || "");
       setFilterProviderId(s.filter_provider || scheduleDefault);
       setFilterModel(s.filter_model || "");
+      setDeepseekThinking(s.deepseek_agent_thinking || "disabled");
+      setDeepseekUserId(s.deepseek_user_id || "student-agent");
     }).catch(() => {});
   }, [reload]);
 
@@ -151,6 +155,23 @@ export default function ProviderSettings() {
     await apiFetch("/api/settings", {
       method: "PUT",
       body: JSON.stringify({ settings: { filter_model: filterModel.trim() } }),
+    });
+  };
+
+  const saveDeepseekThinking = async (value) => {
+    setDeepseekThinking(value);
+    await apiFetch("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ settings: { deepseek_agent_thinking: value } }),
+    });
+  };
+
+  const saveDeepseekUserId = async () => {
+    const cleaned = (deepseekUserId || "student-agent").trim() || "student-agent";
+    setDeepseekUserId(cleaned);
+    await apiFetch("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ settings: { deepseek_user_id: cleaned } }),
     });
   };
 
@@ -323,6 +344,46 @@ export default function ProviderSettings() {
             保存
           </button>
         </div>
+      </div>
+
+      <div className="ui-card p-5 space-y-3">
+        <div>
+          <p className="text-sm font-semibold text-white">DeepSeek Optimizations</p>
+          <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+            路由和 briefing 固定使用 non-thinking；主对话可按需开启 V4 thinking，DeepSeek user_id 用于缓存与调度隔离。
+          </p>
+        </div>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--text-tertiary)]">主 Agent thinking</span>
+          <select
+            value={deepseekThinking}
+            onChange={(e) => saveDeepseekThinking(e.target.value)}
+            className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none"
+          >
+            <option value="disabled">Disabled - 低延迟/低成本</option>
+            <option value="high">High - 复杂问题更稳</option>
+            <option value="max">Max - 深推理/复杂 agent</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--text-tertiary)]">DeepSeek user_id</span>
+          <div className="flex gap-2">
+            <input
+              value={deepseekUserId}
+              onChange={(e) => setDeepseekUserId(e.target.value)}
+              onBlur={saveDeepseekUserId}
+              placeholder="student-agent"
+              className="min-h-10 min-w-0 flex-1 rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white placeholder-[var(--text-tertiary)] focus:outline-none"
+            />
+            <button
+              onClick={saveDeepseekUserId}
+              className="rounded-2xl border border-[var(--border)] px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--hover-bg)]"
+            >
+              保存
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-[var(--text-tertiary)]">只能包含字母、数字、短横线和下划线；不要填真实身份信息。</p>
+        </label>
       </div>
     </div>
   );

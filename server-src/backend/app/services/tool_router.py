@@ -53,7 +53,8 @@ async def select_tools_for_query(
         "优先少选；普通 DDL/通知/课程/调查先选 search_records。"
         "只有需要精确 SQL 条件、聚合统计、表结构推理或用户明确要求查数据库时，再选 search_database。"
         "写操作只有用户明确要求创建、修改、删除、提醒、推送、保存时才选择。"
-        "输出严格 JSON：{\"tools\":[...],\"confidence\":0-1,\"reason\":\"简短原因\"}。"
+        "输出严格 json，不要 Markdown。"
+        "示例 json：{\"tools\":[\"search_records\"],\"confidence\":0.82,\"reason\":\"查询日程事实\"}。"
     )
     recent = [
         {"role": m.get("role"), "content": (m.get("content") or "")[-500:]}
@@ -69,6 +70,9 @@ async def select_tools_for_query(
         response = await agent_complete(
             [AgentMsg(role="system", content=system), AgentMsg(role="user", content=user)],
             [], light_provider, light_model, light_key,
+            response_format={"type": "json_object"},
+            max_tokens=512,
+            thinking_enabled=False,
         )
         parsed = _parse_router_json(response.text or "")
         selected = _sanitize_tool_names(parsed.get("tools") or [], {t.name for t in tools})

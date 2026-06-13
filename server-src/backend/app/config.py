@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     mimo_api_key: str = ""
     deepseek_api_key: str = ""
+    deepseek_user_id: str = "student-agent"
 
     vapid_private_key: str = ""
     vapid_public_key: str = ""

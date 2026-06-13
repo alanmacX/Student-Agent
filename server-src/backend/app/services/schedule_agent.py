@@ -54,9 +54,16 @@ async def run_schedule_agent(
     system_prompt = custom_prompt or STATIC_SYSTEM_PROMPT
     dynamic_context = build_dynamic_context(now)
 
-    merged_system = f"{dynamic_context}\n\n{system_prompt}"
+    merged_system = f"{system_prompt}\n\n{dynamic_context}"
     if extra_system:
         merged_system = f"{merged_system}\n\n{extra_system}"
+
+    if thinking_budget <= 0 and _is_deepseek_provider(provider, model):
+        deepseek_thinking = (await _get_setting(db_path, "deepseek_agent_thinking") or "disabled").strip().lower()
+        if deepseek_thinking == "high":
+            thinking_budget = 1
+        elif deepseek_thinking == "max":
+            thinking_budget = 8192
 
     trimmed_history = history[-(10 * 2):]   # 10 turns is plenty; 20 bloats context
     messages = [AgentMsg(role="system", content=merged_system)]
@@ -238,6 +245,12 @@ def build_dynamic_context(now: datetime | None = None) -> str:
 
 
 _build_dynamic_context = build_dynamic_context
+
+
+def _is_deepseek_provider(provider: dict, model: str) -> bool:
+    api_type = (provider or {}).get("api_type", "")
+    base_url = ((provider or {}).get("base_url", "") or "").lower()
+    return api_type == "deepseek" or "api.deepseek.com" in base_url or (model or "").lower().startswith("deepseek-")
 
 
 def _requires_evidence_tool(user_message: str) -> bool:

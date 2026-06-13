@@ -14,23 +14,61 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 def _parse_usage(usage_json: str | None) -> dict:
     if not usage_json:
-        return {"input_tokens": 0, "output_tokens": 0, "model": "", "provider": ""}
+        return _usage_zero()
     try:
         d = json.loads(usage_json)
         return {
             "input_tokens": d.get("input_tokens", 0),
             "output_tokens": d.get("output_tokens", 0),
+            "cache_hit_tokens": d.get("cache_hit_tokens", 0),
+            "cache_miss_tokens": d.get("cache_miss_tokens", 0),
+            "reasoning_tokens": d.get("reasoning_tokens", 0),
             "model": d.get("model", ""),
             "provider": d.get("provider", ""),
         }
     except (json.JSONDecodeError, TypeError):
-        return {"input_tokens": 0, "output_tokens": 0, "model": "", "provider": ""}
+        return _usage_zero()
 
 
 async def _add_cost(entry: dict, model: str, provider: str = ""):
     """Add cost_usd to entry in-place."""
-    cost = await estimate_cost(model, entry.get("input_tokens", 0), entry.get("output_tokens", 0), provider)
+    cost = await estimate_cost(
+        model,
+        entry.get("input_tokens", 0),
+        entry.get("output_tokens", 0),
+        provider,
+        cache_hit_tokens=entry.get("cache_hit_tokens", 0),
+        cache_miss_tokens=entry.get("cache_miss_tokens", 0),
+    )
     entry["cost_usd"] = round(cost, 6) if cost else 0.0
+
+
+def _usage_zero() -> dict:
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit_tokens": 0,
+        "cache_miss_tokens": 0,
+        "reasoning_tokens": 0,
+        "model": "",
+        "provider": "",
+    }
+
+
+def _usage_bucket() -> dict:
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_hit_tokens": 0,
+        "cache_miss_tokens": 0,
+        "reasoning_tokens": 0,
+        "cost_usd": 0.0,
+    }
+
+
+def _add_usage(target: dict, usage: dict) -> None:
+    for key in ("input_tokens", "output_tokens", "cache_hit_tokens", "cache_miss_tokens", "reasoning_tokens"):
+        target[key] += usage.get(key, 0)
 
 
 @router.get("/tokens")
@@ -39,9 +77,9 @@ async def token_analytics(days: int = Query(7, ge=1, le=90)):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
     daily: dict[str, dict] = defaultdict(lambda: {
-        "chat": {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "_models": defaultdict(lambda: {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0})},
-        "schedule": {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "_models": defaultdict(lambda: {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0})},
-        "standby": {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "_models": defaultdict(lambda: {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0})},
+        "chat": {**_usage_bucket(), "_models": defaultdict(_usage_bucket)},
+        "schedule": {**_usage_bucket(), "_models": defaultdict(_usage_bucket)},
+        "standby": {**_usage_bucket(), "_models": defaultdict(_usage_bucket)},
     })
 
     # Fallback model for historical data without model in usage_json
@@ -64,13 +102,11 @@ async def token_analytics(days: int = Query(7, ge=1, le=90)):
             if not date:
                 continue
             d = daily[date]["chat"]
-            d["input_tokens"] += u.get("input_tokens", 0)
-            d["output_tokens"] += u.get("output_tokens", 0)
+            _add_usage(d, u)
             model = u.get("model") or "mimo-v2.5-pro"
             provider = u.get("provider", "")
             m = d["_models"][model]
-            m["input_tokens"] += u.get("input_tokens", 0)
-            m["output_tokens"] += u.get("output_tokens", 0)
+            _add_usage(m, u)
             m["_provider"] = provider
 
         # 2. Schedule messages
@@ -85,13 +121,11 @@ async def token_analytics(days: int = Query(7, ge=1, le=90)):
             if not date:
                 continue
             d = daily[date]["schedule"]
-            d["input_tokens"] += u.get("input_tokens", 0)
-            d["output_tokens"] += u.get("output_tokens", 0)
+            _add_usage(d, u)
             model = u.get("model") or sched_model
             provider = u.get("provider", "")
             m = d["_models"][model]
-            m["input_tokens"] += u.get("input_tokens", 0)
-            m["output_tokens"] += u.get("output_tokens", 0)
+            _add_usage(m, u)
             m["_provider"] = provider
 
         # 3. Standby agent log (has per-row model column)
@@ -117,7 +151,7 @@ async def token_analytics(days: int = Query(7, ge=1, le=90)):
     # Compute costs and totals
     total_input = total_output = total_cost = 0.0
     result_daily = []
-    by_model: dict[str, dict] = defaultdict(lambda: {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0})
+    by_model: dict[str, dict] = defaultdict(_usage_bucket)
 
     for date in sorted(daily.keys()):
         entry = daily[date]
@@ -130,13 +164,15 @@ async def token_analytics(days: int = Query(7, ge=1, le=90)):
                 await _add_cost(m_data, model_name, provider)
                 s["cost_usd"] += m_data["cost_usd"]
                 bm = by_model[model_name]
-                bm["input_tokens"] += m_data["input_tokens"]
-                bm["output_tokens"] += m_data["output_tokens"]
+                _add_usage(bm, m_data)
                 bm["cost_usd"] += m_data["cost_usd"]
 
         total = {
             "input_tokens": sum(entry[s]["input_tokens"] for s in ("chat", "schedule", "standby")),
             "output_tokens": sum(entry[s]["output_tokens"] for s in ("chat", "schedule", "standby")),
+            "cache_hit_tokens": sum(entry[s]["cache_hit_tokens"] for s in ("chat", "schedule", "standby")),
+            "cache_miss_tokens": sum(entry[s]["cache_miss_tokens"] for s in ("chat", "schedule", "standby")),
+            "reasoning_tokens": sum(entry[s]["reasoning_tokens"] for s in ("chat", "schedule", "standby")),
             "cost_usd": round(sum(entry[s]["cost_usd"] for s in ("chat", "schedule", "standby")), 6),
         }
         total_input += total["input_tokens"]
@@ -168,11 +204,14 @@ async def token_analytics(days: int = Query(7, ge=1, le=90)):
         "totals": {
             "input_tokens": int(total_input),
             "output_tokens": int(total_output),
+            "cache_hit_tokens": sum(d["total"].get("cache_hit_tokens", 0) for d in result_daily),
+            "cache_miss_tokens": sum(d["total"].get("cache_miss_tokens", 0) for d in result_daily),
+            "reasoning_tokens": sum(d["total"].get("reasoning_tokens", 0) for d in result_daily),
             "cost_usd": round(total_cost, 6),
         },
         "by_model": by_model_out,
-        "today": today_data["total"] if today_data else {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
-        "yesterday": yesterday_data["total"] if yesterday_data else {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+        "today": today_data["total"] if today_data else _usage_bucket(),
+        "yesterday": yesterday_data["total"] if yesterday_data else _usage_bucket(),
     }
 
 
