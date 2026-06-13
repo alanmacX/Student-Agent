@@ -160,7 +160,7 @@ export default function ProviderSettings() {
         <div>
           <h2 className="text-lg font-semibold text-white">API Providers</h2>
           <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">
-            添加 OpenAI 兼容接口。模型列表可自动从 /v1/models 获取。
+            添加 OpenAI 兼容接口。模型列表可按 Provider 类型自动获取。
           </p>
         </div>
         <button
