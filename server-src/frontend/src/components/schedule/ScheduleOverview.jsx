@@ -235,6 +235,7 @@ function TodoRow({ todo, delay }) {
   const [open, setOpen] = useState(false);
   const u = URGENCY[todo.urgency] || URGENCY.medium;
   const hasDetail = Boolean(todo.detail);
+  const whenLabel = formatWhen(todo.when);
 
   return (
     <button
@@ -251,9 +252,9 @@ function TodoRow({ todo, delay }) {
           <p className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug text-white">
             {todo.title}
           </p>
-          {todo.when && (
+          {whenLabel && (
             <span className="shrink-0 rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-medium text-white/75">
-              {todo.when}
+              {whenLabel}
             </span>
           )}
           {hasDetail && (
@@ -293,6 +294,26 @@ function OnTheWay() {
       <span className="animate-fade">正在挑出今天该先做的…</span>
     </div>
   );
+}
+
+// Turn a raw ISO timestamp into a human "今天 17:00 / 6月15日" label. Natural-language
+// hints from the LLM (e.g. "明天上午") aren't timestamps and pass through unchanged.
+function formatWhen(value) {
+  const raw = (value || "").trim();
+  if (!raw) return "";
+  if (!/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  const now = new Date();
+  const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: CHINA_TZ });
+  const dayKey = (d) => d.toLocaleDateString("en-CA", { timeZone: CHINA_TZ });
+  const dayDiff = Math.round((new Date(dayKey(date)) - new Date(dayKey(now))) / 86400000);
+  const hasTime = /\d{2}:\d{2}/.test(raw) && time !== "00:00";
+  if (dayDiff === 0) return hasTime ? `今天 ${time}` : "今天";
+  if (dayDiff === 1) return hasTime ? `明天 ${time}` : "明天";
+  if (dayDiff === -1) return hasTime ? `昨天 ${time}` : "昨天";
+  const md = date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric", timeZone: CHINA_TZ });
+  return hasTime ? `${md} ${time}` : md;
 }
 
 const KIND_LABEL = { assignment: "作业", course: "课程变动", reminder: "提醒", message: "通知" };
