@@ -139,15 +139,18 @@ def _anthropic_message(message: AgentMsg) -> dict[str, Any]:
 async def _openai_agent_complete(messages, tools, model, api_key, base_url) -> AgentResponse:
     from .api_service import (
         get_http_client,
-        _endpoint_url,
+        _chat_completion_url,
         _openai_auth_headers,
         _openai_bearer_auth_headers,
-        UsageStats,
+        _apply_deepseek_options,
+        _is_deepseek_base,
+        _parse_openai_usage,
     )
 
     client = get_http_client()
     is_mimo = "xiaomimimo.com" in base_url.lower()
-    print(f"[AGENT] _openai_agent_complete model={model} base_url={base_url} is_mimo={is_mimo} msgs={len(messages)} tools={len(tools)} key={'SET' if api_key else 'EMPTY'}", flush=True)
+    is_deepseek = _is_deepseek_base(base_url)
+    print(f"[AGENT] _openai_agent_complete model={model} base_url={base_url} is_mimo={is_mimo} is_deepseek={is_deepseek} msgs={len(messages)} tools={len(tools)} key={'SET' if api_key else 'EMPTY'}", flush=True)
 
     oai_tools = [
         {
@@ -169,19 +172,23 @@ async def _openai_agent_complete(messages, tools, model, api_key, base_url) -> A
         # 2048 is enough for tool calls + agent responses; 8192 was bloating latency
         body["max_completion_tokens"] = 2048
         body["chat_template_kwargs"] = {"enable_thinking": False}
+    elif is_deepseek:
+        body["stream"] = False
+        body["max_tokens"] = 2048
+        _apply_deepseek_options(body, model, base_url, thinking_enabled=False)
     if oai_tools:
         body["tools"] = oai_tools
         body["tool_choice"] = "auto"
     headers = _openai_auth_headers(api_key, base_url)
     headers["Content-Type"] = "application/json"
 
-    resp = await client.post(_endpoint_url(base_url, "/v1/chat/completions"), headers=headers, json=body)
+    resp = await client.post(_chat_completion_url(base_url), headers=headers, json=body)
     print(f"[AGENT] LLM response status={resp.status_code}", flush=True)
     if resp.status_code == 401 and is_mimo and api_key:
         print(f"[AGENT] 401 mimo retry with bearer auth", flush=True)
         headers = _openai_bearer_auth_headers(api_key)
         headers["Content-Type"] = "application/json"
-        resp = await client.post(_endpoint_url(base_url, "/v1/chat/completions"), headers=headers, json=body)
+        resp = await client.post(_chat_completion_url(base_url), headers=headers, json=body)
         print(f"[AGENT] retry status={resp.status_code}", flush=True)
     if resp.status_code >= 400:
         print(f"[AGENT_ERROR] LLM {resp.status_code} from {base_url} body={resp.text[:800]}", flush=True)
@@ -203,8 +210,7 @@ async def _openai_agent_complete(messages, tools, model, api_key, base_url) -> A
             args = raw_args or {}
         tool_calls.append(ToolCall(id=tc["id"], name=tc["function"]["name"], arguments=args))
 
-    u = data.get("usage", {})
-    usage = UsageStats(input_tokens=u.get("prompt_tokens", 0), output_tokens=u.get("completion_tokens", 0))
+    usage = _parse_openai_usage(data.get("usage", {}))
 
     stop_reason = "tool_use" if tool_calls else "end_turn"
     return AgentResponse(text=text, tool_calls=tool_calls, usage=usage, stop_reason=stop_reason)

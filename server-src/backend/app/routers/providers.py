@@ -110,8 +110,15 @@ async def fetch_provider_models(provider_id: str, request: Request):
     body = await request.json()
     base_url = (body.get("base_url") or "").rstrip("/")
     api_key = body.get("api_key") or ""
+    api_type = body.get("api_type") or ""
     if _is_blank_or_masked_key(api_key):
         api_key = ""
+    provider = await get_provider_config(provider_id)
+    if provider:
+        base_url = base_url or provider.get("base_url", "")
+        api_type = api_type or provider.get("api_type", "")
+        if not api_key:
+            api_key = await get_provider_api_key(provider_id, provider)
     if not base_url or not api_key:
         async with db_conn() as db:
             row = await (await db.execute(
@@ -121,16 +128,11 @@ async def fetch_provider_models(provider_id: str, request: Request):
             data = json.loads(row[0])
             base_url = base_url or data.get("base_url", "")
             api_key = api_key or data.get("api_key", "")
+            api_type = api_type or data.get("api_type", "")
+    if not api_type:
+        api_type = "openAICompatible"
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(
-                f"{base_url}/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-            r.raise_for_status()
-            data = r.json()
-        model_ids = [m["id"] for m in data.get("data", [])]
+        model_ids = await fetch_models(api_key, base_url, api_type)
         return {"ok": True, "models": model_ids}
     except Exception as e:
         return {"ok": False, "error": str(e), "models": []}

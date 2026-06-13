@@ -10,6 +10,7 @@ BUILTIN_PROVIDERS: list[dict[str, Any]] = []
 
 PROVIDER_ALIASES = {
     "mimo": "xiaomimimo",
+    "deepseek-v4": "deepseek",
     # Legacy defaults now route to the only configured provider.
     "openai": "xiaomimimo",
     "anthropic": "xiaomimimo",
@@ -18,6 +19,7 @@ PROVIDER_ALIASES = {
 
 API_KEY_SETTINGS = {
     "xiaomimimo": ("mimo_api_key", "mimo_api_key"),
+    "deepseek": ("deepseek_api_key", "deepseek_api_key"),
 }
 
 

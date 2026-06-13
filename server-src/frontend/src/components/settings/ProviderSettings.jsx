@@ -18,14 +18,7 @@ async function deleteProvider(id) {
   return apiFetch(`/api/providers/${id}`, { method: "DELETE" });
 }
 
-async function fetchModels(providerId, base_url, api_key) {
-  return apiFetch(`/api/providers/${providerId || "new"}/fetch-models`, {
-    method: "POST",
-    body: JSON.stringify({ base_url, api_key }),
-  });
-}
-
-const EMPTY_FORM = { name: "", base_url: "", api_key: "", models: [] };
+const EMPTY_FORM = { name: "", base_url: "", api_key: "", api_type: "openAICompatible", models: [] };
 
 export default function ProviderSettings() {
   const [providers, setProviders] = useState([]);
@@ -81,7 +74,10 @@ export default function ProviderSettings() {
   const handleFetchModels = async () => {
     setFetchingModels(true);
     try {
-      const result = await fetchModels(form.id, form.base_url, form.api_key);
+      const result = await apiFetch(`/api/providers/${form.id || "new"}/fetch-models`, {
+        method: "POST",
+        body: JSON.stringify({ base_url: form.base_url, api_key: form.api_key, api_type: form.api_type }),
+      });
       if (result.models?.length) {
         setForm((f) => ({ ...f, models: result.models }));
       } else {
@@ -359,6 +355,20 @@ function ProviderForm({ form, setForm, onFetchModels, fetchingModels, onSave, on
           />
         </label>
       </div>
+      <label className="block">
+        <span className="mb-1 block text-xs font-medium text-[var(--text-tertiary)]">API 类型</span>
+        <select
+          value={form.api_type || "openAICompatible"}
+          onChange={(e) => setForm((prev) => ({ ...prev, api_type: e.target.value }))}
+          className="min-h-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"
+        >
+          <option value="openAICompatible">OpenAI Compatible</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="xiaomiMimo">小米 MiMo</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="gemini">Gemini</option>
+        </select>
+      </label>
       <label className="block">
         <span className="mb-1 block text-xs font-medium text-[var(--text-tertiary)]">API Key</span>
         <input

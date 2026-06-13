@@ -54,6 +54,8 @@ KNOWN_PRICING: dict[str, tuple[float, float]] = {
     "gemini-2.5-flash": (0.15, 0.60),
     "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),
+    "deepseek-v4-flash": (0.14, 0.28),
+    "deepseek-v4-pro": (0.435, 0.87),
     "mimo-v2-pro": (0.50, 2.00),
     "mimo-v2.5-pro": (0.50, 2.00),
 }
@@ -116,7 +118,7 @@ async def estimate_cost(model: str, input_tokens: int, output_tokens: int, provi
 
 
 def economical_model(provider_id: str) -> str:
-    prefix = {"openai": "gpt-", "anthropic": "claude-", "gemini": "gemini-", "xiaomimimo": "mimo-"}.get(
+    prefix = {"openai": "gpt-", "anthropic": "claude-", "gemini": "gemini-", "xiaomimimo": "mimo-", "deepseek": "deepseek-"}.get(
         provider_id, ""
     )
     candidates = {
@@ -130,6 +132,7 @@ def economical_model(provider_id: str) -> str:
             "anthropic": "claude-haiku-3-5",
             "gemini": "gemini-2.0-flash",
             "xiaomimimo": "mimo-v2.5-pro",
+            "deepseek": "deepseek-v4-flash",
         }
         return defaults.get(provider_id, "gpt-4o-mini")
     return min(candidates, key=candidates.get)
@@ -173,11 +176,38 @@ def _openai_bearer_auth_headers(api_key: str) -> dict:
 
 
 def _should_send_deepseek_thinking(model: str, base_url: str) -> bool:
-    return "deepseek" in base_url.lower() and model.lower() == "deepseek-chat"
+    return _is_deepseek_base(base_url) and model.lower().startswith("deepseek-")
 
 
 def _is_xiaomi_mimo(base_url: str) -> bool:
     return "xiaomimimo.com" in base_url.lower()
+
+
+def _is_deepseek_base(base_url: str) -> bool:
+    return "api.deepseek.com" in (base_url or "").lower()
+
+
+def _chat_completion_url(base_url: str) -> str:
+    path = "/chat/completions" if _is_deepseek_base(base_url) else "/v1/chat/completions"
+    return _endpoint_url(base_url, path)
+
+
+def _models_url(base_url: str, api_type: str = "") -> str:
+    path = "/models" if api_type == "deepseek" or _is_deepseek_base(base_url) else "/v1/models"
+    return _endpoint_url(base_url, path)
+
+
+def _balance_url(base_url: str, api_type: str = "") -> str:
+    path = "/user/balance" if api_type == "deepseek" or _is_deepseek_base(base_url) else "/user/balance"
+    return _endpoint_url(base_url, path)
+
+
+def _apply_deepseek_options(body: dict, model: str, base_url: str, thinking_enabled: bool = False) -> None:
+    if not _is_deepseek_base(base_url):
+        return
+    body["thinking"] = {"type": "enabled" if thinking_enabled else "disabled"}
+    if thinking_enabled:
+        body["reasoning_effort"] = "high"
 
 
 def _check_http(response: httpx.Response):
@@ -197,7 +227,7 @@ async def stream_openai(
     thinking_enabled: bool = False,
 ) -> AsyncGenerator[StreamEvent, None]:
     client = get_http_client()
-    url = _endpoint_url(base_url, "/v1/chat/completions")
+    url = _chat_completion_url(base_url)
     headers = _openai_auth_headers(api_key, base_url)
     headers["Content-Type"] = "application/json"
     is_mimo = _is_xiaomi_mimo(base_url)
@@ -213,8 +243,8 @@ async def stream_openai(
     else:
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
-    if thinking_enabled and _should_send_deepseek_thinking(model, base_url):
-        body["thinking"] = {"type": "enabled"}
+    if _should_send_deepseek_thinking(model, base_url):
+        _apply_deepseek_options(body, model, base_url, thinking_enabled)
 
     if is_mimo:
         resp = await client.post(url, headers=headers, json=body)
@@ -378,6 +408,7 @@ def make_service(api_type: str):
     return {
         "openAI": stream_openai,
         "openAICompatible": stream_openai,
+        "deepseek": stream_openai,
         "xiaomiMimo": stream_openai,
         "anthropic": stream_anthropic,
         "gemini": stream_gemini,
@@ -399,9 +430,9 @@ async def fetch_balance(api_key: str, base_url: str, api_type: str) -> dict | No
                     "used": data.get("total_used", 0),
                     "available": data.get("total_available", 0),
                 }
-        elif api_type == "openAICompatible":
+        elif api_type in ("openAICompatible", "deepseek"):
             headers = _openai_bearer_auth_headers(api_key)
-            url = _endpoint_url(base_url, "/user/balance")
+            url = _balance_url(base_url, api_type)
             resp = await client.get(url, headers=headers)
             if resp.status_code == 200:
                 data = resp.json()
@@ -423,8 +454,8 @@ async def check_reachability(api_key: str, base_url: str, api_type: str) -> bool
     """Check if provider endpoint is reachable."""
     client = get_http_client()
     try:
-        if api_type in ("openAI", "openAICompatible"):
-            url = _endpoint_url(base_url, "/v1/models")
+        if api_type in ("openAI", "openAICompatible", "deepseek"):
+            url = _models_url(base_url, api_type)
             headers = _openai_auth_headers(api_key, base_url)
             resp = await client.get(url, headers=headers, timeout=httpx.Timeout(30.0, connect=30.0))
             return resp.status_code < 500
@@ -471,8 +502,8 @@ async def fetch_models(api_key: str, base_url: str, api_type: str) -> list[str]:
     try:
         if api_type == "xiaomiMimo":
             return ["mimo-v2.5-pro"]
-        if api_type in ("openAI", "openAICompatible"):
-            url = _endpoint_url(base_url, "/v1/models")
+        if api_type in ("openAI", "openAICompatible", "deepseek"):
+            url = _models_url(base_url, api_type)
             headers = _openai_auth_headers(api_key, base_url)
             resp = await client.get(url, headers=headers, timeout=15.0)
             if resp.status_code == 200:

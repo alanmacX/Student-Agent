@@ -39,6 +39,10 @@ async def run_migrations(db_path: str):
             INSERT OR IGNORE INTO custom_providers (id, data_json)
             VALUES ('xiaomimimo', '{"id":"xiaomimimo","name":"小米 MiMo","base_url":"https://token-plan-sgp.xiaomimimo.com/v1","api_type":"xiaomiMimo","models":["mimo-v2.5-pro"],"api_key":"","icon_name":"m-circle","color_hex":"FF6900"}')
         """)
+        await db.execute("""
+            INSERT OR IGNORE INTO custom_providers (id, data_json)
+            VALUES ('deepseek', '{"id":"deepseek","name":"DeepSeek","base_url":"https://api.deepseek.com","api_type":"deepseek","models":["deepseek-v4-flash","deepseek-v4-pro"],"api_key":"","icon_name":"sparkles","color_hex":"4D6BFF"}')
+        """)
         await _seed_knowledge_base(db)
         await db.commit()
 

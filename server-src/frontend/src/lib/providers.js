@@ -23,6 +23,12 @@ export const FALLBACK_PROVIDERS = [
     models: ["mimo-v2.5-pro"],
     color_hex: "FF6900",
   },
+  {
+    id: "deepseek",
+    name: "DeepSeek",
+    models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+    color_hex: "4D6BFF",
+  },
 ];
 
 export function mergeProviders(data) {
@@ -46,7 +52,9 @@ export function providerMeta(providerId, providers = FALLBACK_PROVIDERS) {
 }
 
 export function normalizeProviderId(providerId) {
-  return providerId === "mimo" ? "xiaomimimo" : providerId;
+  if (providerId === "mimo") return "xiaomimimo";
+  if (providerId === "deepseek-v4") return "deepseek";
+  return providerId;
 }
 
 export function defaultModel(provider) {
