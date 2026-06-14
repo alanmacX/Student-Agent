@@ -295,6 +295,7 @@ export default function NotificationCenter() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      window.dispatchEvent(new CustomEvent("app-refresh-done", { detail: { tab: "notifications" } }));
     }
   }, []);
 

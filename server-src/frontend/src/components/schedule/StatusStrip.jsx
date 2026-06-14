@@ -57,7 +57,7 @@ export default function StatusStrip() {
   ];
 
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto px-1 py-1">
+    <div className="flex flex-wrap items-center gap-1.5 px-1 py-1">
       {items.map(({ icon: Icon, label, color, tip }) => (
         <div
           key={label}

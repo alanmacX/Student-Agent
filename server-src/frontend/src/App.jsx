@@ -108,8 +108,26 @@ function App() {
   const [mountedTabs, setMountedTabs] = useState(() => new Set([initialTabFromLocation()]));
   const [tokenRequired, setTokenRequired] = useState(false);
 
+  // Resolve only when the active tab reports its refresh actually finished
+  // (via "app-refresh-done"), so the spinner reflects real work — not a fixed
+  // timer. A safety net resolves anyway if a view never reports back.
   const handleRefresh = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("app-refresh", { detail: { tab } }));
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("app-refresh-done", onDone);
+        clearTimeout(safety);
+        resolve();
+      };
+      const onDone = (event) => {
+        if (!event.detail?.tab || event.detail.tab === tab) finish();
+      };
+      window.addEventListener("app-refresh-done", onDone);
+      window.dispatchEvent(new CustomEvent("app-refresh", { detail: { tab } }));
+      const safety = setTimeout(finish, 5000);
+    });
   }, [tab]);
 
   usePullToRefresh(handleRefresh);

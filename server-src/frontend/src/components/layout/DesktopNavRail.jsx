@@ -11,7 +11,7 @@ export default function DesktopNavRail({ active, onChange, onRefresh }) {
     try {
       await onRefresh?.();
     } finally {
-      setTimeout(() => setRefreshing(false), 800);
+      setRefreshing(false);
     }
   };
 

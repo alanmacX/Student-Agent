@@ -22,18 +22,19 @@ export default function SettingsView() {
   const [tab, setTab] = useState("providers");
 
   return (
-    <div className="relative flex h-full flex-col bg-[var(--panel-bg)] md:flex-row">
-      {/* Tab list — floating glass island on mobile, sidebar on desktop */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center px-3 pt-3 md:pointer-events-auto md:static md:block md:w-52 md:justify-start md:border-r md:border-[var(--border)] md:bg-[var(--sidebar-bg)] md:px-0 md:py-3">
-        <div className="no-scrollbar glass-pill pointer-events-auto inline-flex w-fit max-w-full gap-1 overflow-x-auto rounded-full p-1.5 md:flex md:w-full md:max-w-none md:flex-col md:gap-1 md:rounded-none md:border-0 md:bg-transparent md:p-2 md:shadow-none md:backdrop-blur-none md:space-y-1">
+    <div className="relative flex h-full flex-col bg-[var(--panel-bg)] md:flex-row md:gap-4 md:p-4 lg:gap-5 lg:p-6">
+      {/* Tab list — floating glass island on mobile, glass card on desktop.
+          No hard sidebar border/fill — matches the notifications tab. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center px-3 pt-3 md:pointer-events-auto md:static md:block md:w-52 md:shrink-0 md:px-0 md:pt-0">
+        <div className="no-scrollbar glass-pill pointer-events-auto inline-flex w-fit max-w-full gap-1 overflow-x-auto rounded-full p-1.5 md:sticky md:top-0 md:flex md:w-full md:max-w-none md:flex-col md:gap-1 md:rounded-2xl md:p-2">
         {TABS.map(({ id, label, mobileLabel, icon: Icon }) => (
           <button
             key={id}
             onClick={() => setTab(id)}
-            className={`flex min-h-9 flex-shrink-0 items-center justify-center gap-2 rounded-full px-3.5 text-sm transition md:w-full md:justify-start md:rounded-2xl md:px-4 ${
+            className={`flex min-h-9 flex-shrink-0 items-center justify-center gap-2 rounded-full px-3.5 text-sm transition-colors duration-200 md:w-full md:justify-start md:rounded-xl md:px-3.5 md:py-2 ${
               tab === id
-                ? "bg-[var(--hover-bg)] text-white"
-                : "text-[var(--text-secondary)] hover:bg-[var(--surface-2)] hover:text-white"
+                ? "bg-[var(--hover-bg)] text-white shadow-sm"
+                : "text-[var(--text-tertiary)] hover:text-white hover:bg-[var(--surface-2)]"
             }`}
           >
             <Icon size={16} />
@@ -44,7 +45,7 @@ export default function SettingsView() {
       </div>
 
       {/* Content */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-[72px] pb-36 md:p-6">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-[72px] pb-36 md:p-0 md:pt-0">
         {tab === "providers" && <ProviderSettings />}
         {tab === "zjut" && <ZjutSettings />}
         {tab === "chaoxing" && <ChaoxingStatus />}

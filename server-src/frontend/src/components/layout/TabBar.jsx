@@ -11,7 +11,7 @@ export default function TabBar({ active, onChange, onRefresh }) {
     try {
       await onRefresh?.();
     } finally {
-      setTimeout(() => setRefreshing(false), 800);
+      setRefreshing(false);
     }
   };
 

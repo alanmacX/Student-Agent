@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCw, BookOpen, CalendarClock, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { RefreshCw, BookOpen, CalendarClock, ChevronLeft, ChevronRight } from "lucide-react";
 import { fetchScheduleSidebar, refreshBriefing } from "../../api/schedule";
 import StatusStrip from "./StatusStrip";
 import TokenSummary from "./TokenSummary";
@@ -58,6 +58,9 @@ export default function ScheduleOverview() {
     } finally {
       setLoading(false);
       setRefreshingOverview(false);
+      // Let the global refresh button know this tab finished, so its spinner
+      // tracks real work instead of a fixed timer.
+      window.dispatchEvent(new CustomEvent("app-refresh-done", { detail: { tab: "overview" } }));
     }
   };
 
@@ -91,8 +94,38 @@ export default function ScheduleOverview() {
       if (!event.detail?.tab || event.detail.tab === "overview") refresh({ soft: true });
     };
     window.addEventListener("app-refresh", handler);
+
+    // Dynamic freshness: re-pull on an interval while the tab is visible, and
+    // immediately when the user returns to the tab/window. Paused when hidden
+    // so we don't poll a backgrounded PWA. This is a cheap DB read (no LLM).
+    let interval = null;
+    const start = () => {
+      if (!interval) interval = setInterval(() => refresh({ soft: true }), 90_000);
+    };
+    const stop = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+      } else {
+        refresh({ soft: true });
+        start();
+      }
+    };
+    const onFocus = () => refresh({ soft: true });
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+
     return () => {
       window.removeEventListener("app-refresh", handler);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+      stop();
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []);
@@ -232,49 +265,40 @@ const URGENCY = {
 };
 
 function TodoRow({ todo, delay }) {
-  const [open, setOpen] = useState(false);
   const u = URGENCY[todo.urgency] || URGENCY.medium;
-  const hasDetail = Boolean(todo.detail);
   const whenLabel = formatWhen(todo.when);
+  const isHigh = todo.urgency === "high";
 
   return (
-    <button
-      type="button"
-      onClick={() => hasDetail && setOpen((v) => !v)}
-      className={`animate-rise group flex w-full items-start gap-3 rounded-[20px] bg-white/[0.05] px-4 py-3 text-left ring-1 ${u.ring} transition-all duration-200 ease-[var(--ease-spring)] hover:bg-white/[0.09] active:scale-[0.985]`}
+    <div
+      className={`animate-rise flex items-start gap-3 rounded-[20px] bg-white/[0.06] px-4 py-3 ring-1 ${u.ring}`}
       style={{ animationDelay: `${delay}ms` }}
     >
       <span className="mt-[7px] flex shrink-0">
-        <span className={`h-2 w-2 rounded-full ${u.dot} ${todo.urgency === "high" ? "animate-pulse-soft" : ""}`} />
+        <span className={`h-2 w-2 rounded-full ${u.dot} ${isHigh ? "animate-pulse-soft" : ""}`} />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug text-white">
+        <div className="flex items-start justify-between gap-2.5">
+          <p className="min-w-0 flex-1 text-[15px] font-semibold leading-snug text-white">
             {todo.title}
           </p>
           {whenLabel && (
-            <span className="shrink-0 rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-medium text-white/75">
+            <span
+              className={`mt-0.5 shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold tabular-nums ${
+                isHigh ? "bg-orange-400/20 text-orange-200 ring-1 ring-orange-400/30" : "bg-white/10 text-white/75"
+              }`}
+            >
               {whenLabel}
             </span>
           )}
-          {hasDetail && (
-            <ChevronDown
-              size={15}
-              className={`shrink-0 text-white/40 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-            />
-          )}
         </div>
         {todo.detail && (
-          <p
-            className={`overflow-hidden text-[13px] leading-relaxed text-white/65 transition-all duration-300 ease-[var(--ease-smooth)] ${
-              open ? "mt-1.5 max-h-40 opacity-100" : "mt-0.5 max-h-[1.6em] truncate opacity-80"
-            }`}
-          >
+          <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-white/65">
             {todo.detail}
           </p>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -296,24 +320,35 @@ function OnTheWay() {
   );
 }
 
-// Turn a raw ISO timestamp into a human "今天 17:00 / 6月15日" label. Natural-language
-// hints from the LLM (e.g. "明天上午") aren't timestamps and pass through unchanged.
+// Turn a timestamp into a human "今天 17:00 / 明天 04:00 / 6月15日" label in local
+// (China) time. Tolerates "(UTC)"/"Z"/no-zone strings (treated as UTC) and explicit
+// offsets. Natural-language hints from the LLM (e.g. "明天上午") pass through unchanged.
 function formatWhen(value) {
   const raw = (value || "").trim();
   if (!raw) return "";
-  if (!/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw;
-  const date = new Date(raw);
+  const m = raw.match(/(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+  if (!m) return raw;
+  const [, y, mo, d, hh, mm] = m;
+  const hasTime = hh != null;
+  // Use the native parse when an explicit offset is present; otherwise treat the
+  // wall-clock as UTC (backend/LLM emit UTC, often tagged with a literal "(UTC)").
+  const hasOffset = /[+-]\d{2}:?\d{2}$/.test(raw);
+  const date = hasOffset
+    ? new Date(raw)
+    : new Date(Date.UTC(+y, +mo - 1, +d, +(hh || 0), +(mm || 0)));
   if (Number.isNaN(date.getTime())) return raw;
+
   const now = new Date();
   const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: CHINA_TZ });
-  const dayKey = (d) => d.toLocaleDateString("en-CA", { timeZone: CHINA_TZ });
+  const dayKey = (dd) => dd.toLocaleDateString("en-CA", { timeZone: CHINA_TZ });
   const dayDiff = Math.round((new Date(dayKey(date)) - new Date(dayKey(now))) / 86400000);
-  const hasTime = /\d{2}:\d{2}/.test(raw) && time !== "00:00";
-  if (dayDiff === 0) return hasTime ? `今天 ${time}` : "今天";
-  if (dayDiff === 1) return hasTime ? `明天 ${time}` : "明天";
-  if (dayDiff === -1) return hasTime ? `昨天 ${time}` : "昨天";
+  const showTime = hasTime && time !== "00:00";
   const md = date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric", timeZone: CHINA_TZ });
-  return hasTime ? `${md} ${time}` : md;
+  if (dayDiff === 0) return showTime ? `今天 ${time}` : "今天";
+  if (dayDiff === 1) return showTime ? `明天 ${time}` : "明天";
+  if (dayDiff === -1) return showTime ? `昨天 ${time}` : "昨天";
+  if (dayDiff > 1 && dayDiff <= 6) return showTime ? `${dayDiff}天后 ${time}` : `${dayDiff}天后`;
+  return showTime ? `${md} ${time}` : md;
 }
 
 const KIND_LABEL = { assignment: "作业", course: "课程变动", reminder: "提醒", message: "通知" };
