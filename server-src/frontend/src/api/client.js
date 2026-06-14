@@ -38,9 +38,10 @@ async function handleUnauthorized(resp) {
 }
 
 export async function apiFetch(path, options = {}) {
+  const { headers, ...rest } = options;
   const resp = await fetch(`${BASE_URL}${path}`, {
-    headers: authHeaders(options.headers),
-    ...options,
+    ...rest,
+    headers: authHeaders(headers),
   });
   if (!resp.ok) {
     await handleUnauthorized(resp);
@@ -50,9 +51,10 @@ export async function apiFetch(path, options = {}) {
 }
 
 export async function apiFetchBlob(path, options = {}) {
+  const { headers, ...rest } = options;
   const resp = await fetch(`${BASE_URL}${path}`, {
-    headers: authHeaders(options.headers),
-    ...options,
+    ...rest,
+    headers: authHeaders(headers),
   });
   if (!resp.ok) {
     await handleUnauthorized(resp);
