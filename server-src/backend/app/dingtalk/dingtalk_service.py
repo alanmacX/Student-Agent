@@ -126,6 +126,9 @@ def is_dingtalk_logged_in() -> bool:
 
     Globs for the account-scoped *_v3 directory under the config mount,
     then decrypts the DB and checks tbuser_profile_v2.
+    This is intentionally a session/profile check, not a message-activity
+    check: quiet DingTalk periods can leave the DB/WAL untouched for many
+    hours while the client is still logged in.
     Results are cached for 15 seconds to avoid re-decrypting on every poll.
     """
     import time
@@ -160,27 +163,6 @@ def is_dingtalk_logged_in() -> bool:
         result = count > 0
     except Exception:
         result = False
-
-    # Freshness gate. A profile row persists forever even after the session
-    # silently dies, so "profile exists" alone keeps reporting logged-in for a
-    # dead client (this is exactly why an 8-day outage showed green "正常运行"
-    # and never offered the re-scan QR). A connected client writes to its DB
-    # frequently; if the message DB / WAL hasn't changed in a long while, treat
-    # the session as logged out so the UI surfaces the QR again. Re-login makes
-    # the client reconnect and write, so this flips back to True automatically.
-    if result:
-        try:
-            stale_s = int(os.getenv("DINGTALK_STALE_SECONDS", str(6 * 3600)))
-            newest = 0.0
-            for p in (str(db), str(db) + "-wal"):
-                try:
-                    newest = max(newest, os.path.getmtime(p))
-                except OSError:
-                    pass
-            if newest > 0 and (time.time() - newest) > stale_s:
-                result = False
-        except Exception:
-            pass
 
     _login_cache["value"] = result
     _login_cache["ts"] = now

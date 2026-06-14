@@ -1,9 +1,9 @@
 """Health monitor for DingTalk client and Chaoxing session.
 
 Runs every 10 minutes via APScheduler. Checks:
-  1. DingTalk liveness — the client writes to its own message DB regularly while
-     connected; once the session dies the file simply stops changing. We detect
-     death by the DB file's mtime going stale, then push an alert.
+  1. DingTalk liveness — prefer the in-app sync heartbeat. The DingTalk DB/WAL
+     can remain untouched during quiet periods even while the client is logged
+     in, so file mtime is only a fallback when sync heartbeat is absent/stale.
   2. Chaoxing login status
   3. API provider consecutive failures (called externally from classifier)
 
@@ -29,10 +29,10 @@ from app.services.push_service import (
 
 logger = logging.getLogger("health_monitor")
 
-# Stale threshold: a connected DingTalk client touches its DB far more often than
-# this, so crossing it means the session is almost certainly dead. Kept generous
-# to avoid false alarms during genuinely quiet stretches (e.g. overnight).
+# DB/WAL age threshold used only when the regular decrypt/sync heartbeat is
+# absent or stale. Quiet but healthy DingTalk sessions can leave the WAL old.
 DINGTALK_STALE_SECONDS = int(os.getenv("DINGTALK_STALE_SECONDS", str(6 * 3600)))
+DINGTALK_SYNC_STALE_SECONDS = int(os.getenv("DINGTALK_SYNC_STALE_SECONDS", str(3 * 60)))
 # How often a still-unresolved alert is allowed to re-fire.
 HEALTH_COOLDOWN_SECONDS = int(os.getenv("HEALTH_COOLDOWN_SECONDS", str(6 * 3600)))
 CHAOXING_COOLDOWN_SECONDS = int(os.getenv("CHAOXING_COOLDOWN_SECONDS", str(12 * 3600)))
@@ -67,7 +67,24 @@ def _dingtalk_db_age() -> float | None:
     return time.time() - newest
 
 
-def _check_dingtalk() -> List[Tuple[str, str, str, int]]:
+def _dingtalk_sync_age(db_path: str) -> float | None:
+    """Seconds since the last successful DingTalk decrypt/sync pass."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT value FROM dingtalk_sync_state WHERE key='last_sync_ok_at'"
+            ).fetchone()
+    except Exception:
+        return None
+    if not row or not row[0]:
+        return None
+    try:
+        return time.time() - int(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _check_dingtalk(db_path: str) -> List[Tuple[str, str, str, int]]:
     """Return list of (tag, title, body, cooldown_seconds) alerts."""
     age = _dingtalk_db_age()
     if age is None:
@@ -77,13 +94,24 @@ def _check_dingtalk() -> List[Tuple[str, str, str, int]]:
             "未找到钉钉账号数据，客户端可能未运行或从未登录，请在设置中扫码登录。",
             HEALTH_COOLDOWN_SECONDS,
         )]
+    sync_age = _dingtalk_sync_age(db_path)
+    if sync_age is not None and sync_age <= DINGTALK_SYNC_STALE_SECONDS:
+        return []
     if age > DINGTALK_STALE_SECONDS:
         hours = int(age // 3600)
         span = f"{hours} 小时" if hours >= 1 else f"{int(age // 60)} 分钟"
+        sync_span = ""
+        if sync_age is not None:
+            sync_hours = int(sync_age // 3600)
+            sync_span = (
+                f"；最近成功同步在 {sync_hours} 小时前"
+                if sync_hours >= 1
+                else f"；最近成功同步在 {int(sync_age // 60)} 分钟前"
+            )
         return [(
             "dingtalk_stale",
             "钉钉可能已掉线",
-            f"消息库已 {span} 无更新，登录态可能已失效，请到「设置 → 钉钉」重新扫码登录。",
+            f"消息库已 {span} 无更新{sync_span}，登录态可能已失效，请到「设置 → 钉钉」检查。",
             HEALTH_COOLDOWN_SECONDS,
         )]
     return []
@@ -137,7 +165,7 @@ async def run_health_check(app_state) -> None:
     )
 
     alerts: List[Tuple[str, str, str, int]] = []
-    alerts.extend(_check_dingtalk())
+    alerts.extend(_check_dingtalk(db_path))
     alerts.extend(_check_chaoxing(app_state))
 
     for tag, title, body, cooldown in alerts:
