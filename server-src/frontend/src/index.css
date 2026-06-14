@@ -327,7 +327,20 @@ textarea {
 
 .desktop-nav-button.is-active {
   background: var(--hover-bg-strong);
-  color: var(--text-primary);
+  color: var(--accent-soft);
+}
+
+/* Accent indicator so the active tab is unmistakable even while collapsed. */
+.desktop-nav-button.is-active::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  height: 18px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  transform: translateY(-50%);
 }
 
 .desktop-nav-label {

@@ -18,6 +18,18 @@ from app.config import settings
 
 router = APIRouter(prefix="/api/conversations", tags=["chat"])
 
+# Cap how much conversation history is replayed to the LLM each turn. Sending the
+# full transcript grows input tokens (and latency) without bound on long chats;
+# the most recent turns carry virtually all the useful context.
+MAX_HISTORY_MESSAGES = 24
+
+
+def _cap_history(rows: list) -> list:
+    """Keep only the most recent MAX_HISTORY_MESSAGES messages."""
+    if len(rows) <= MAX_HISTORY_MESSAGES:
+        return rows
+    return rows[-MAX_HISTORY_MESSAGES:]
+
 
 # Chat tools definition
 CHAT_TOOLS = [
@@ -232,6 +244,7 @@ async def stream_chat(conv_id: str, request: Request):
             "SELECT role, content FROM messages WHERE conversation_id=? ORDER BY position",
             (conv_id,),
         )).fetchall()
+    history_rows = _cap_history(history_rows)
 
     # Inject current time into every system prompt regardless of conversation type
     stamped_system = inject_time(system_prompt)
