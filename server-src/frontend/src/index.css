@@ -290,13 +290,14 @@ textarea {
   height: 44px;
   width: 44px;
   align-items: center;
-  gap: 10px;
+  gap: 0;
   overflow: hidden;
   border: 0;
   border-radius: 999px;
   background: transparent;
   color: var(--text-tertiary);
   padding: 0 12px;
+  justify-content: flex-start;
   white-space: nowrap;
   outline: none;
   transition:
@@ -319,6 +320,11 @@ textarea {
   background: var(--hover-bg);
   color: var(--text-primary);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+}
+
+/* Keep the icon at its intrinsic size so the collapsed pill centers it. */
+.desktop-nav-button > svg {
+  flex: none;
 }
 
 .desktop-nav-button:active {
@@ -346,6 +352,7 @@ textarea {
 .desktop-nav-label {
   display: inline-block;
   max-width: 0;
+  margin-left: 0;
   overflow: hidden;
   opacity: 0;
   transform: translateX(-4px);
@@ -354,6 +361,7 @@ textarea {
   line-height: 1;
   transition:
     max-width 0.24s var(--ease-smooth),
+    margin-left 0.24s var(--ease-smooth),
     opacity 0.16s var(--ease-smooth),
     transform 0.22s var(--ease-spring);
 }
@@ -361,6 +369,7 @@ textarea {
 .desktop-nav-rail__group:hover .desktop-nav-label,
 .desktop-nav-button:focus-visible .desktop-nav-label {
   max-width: 86px;
+  margin-left: 10px;
   opacity: 1;
   transform: translateX(0);
 }
@@ -368,9 +377,10 @@ textarea {
 .desktop-nav-action {
   height: 58px;
   width: 58px;
+  justify-content: center;
   overflow: visible;
   border-radius: 999px;
-  padding: 0 19px;
+  padding: 0;
 }
 
 .desktop-nav-action:disabled {
