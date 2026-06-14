@@ -49,6 +49,18 @@ export async function apiFetch(path, options = {}) {
   return resp.json();
 }
 
+export async function apiFetchBlob(path, options = {}) {
+  const resp = await fetch(`${BASE_URL}${path}`, {
+    headers: authHeaders(options.headers),
+    ...options,
+  });
+  if (!resp.ok) {
+    await handleUnauthorized(resp);
+    throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+  }
+  return resp.blob();
+}
+
 export function apiStream(path, body, callbacks) {
   const controller = new AbortController();
 

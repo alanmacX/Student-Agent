@@ -4,7 +4,7 @@ import {
   MessageSquare, Clock, Filter, Plus, X, ChevronDown, ChevronUp, Info,
   QrCode, Smartphone,
 } from "lucide-react";
-import { apiFetch } from "../../api/client";
+import { apiFetch, apiFetchBlob } from "../../api/client";
 
 function fmtAge(s) {
   if (s < 0) return "—";
@@ -36,9 +36,21 @@ function QRLoginPanel({ onLoginDetected }) {
   const [refreshing, setRefreshing] = useState(false);
   const refreshRef = useRef(null);
   const pollRef = useRef(null);
+  const imgSrcRef = useRef(null);
 
-  const fetchScreenshot = useCallback(() => {
-    setImgSrc(`/api/dingtalk/qr-screenshot?t=${Date.now()}`);
+  const fetchScreenshot = useCallback(async () => {
+    try {
+      const blob = await apiFetchBlob(`/api/dingtalk/qr-screenshot?t=${Date.now()}`, {
+        headers: { Accept: "image/png" },
+      });
+      const nextSrc = URL.createObjectURL(blob);
+      if (imgSrcRef.current) URL.revokeObjectURL(imgSrcRef.current);
+      imgSrcRef.current = nextSrc;
+      setImgSrc(nextSrc);
+      setQrError(false);
+    } catch (_) {
+      setQrError(true);
+    }
   }, []);
 
   // Click the refresh button inside DingTalk window, then fetch new screenshot
@@ -52,7 +64,7 @@ function QRLoginPanel({ onLoginDetected }) {
     } catch (_) {
       // Even if refresh fails, try fetching the current screenshot
     }
-    fetchScreenshot();
+    await fetchScreenshot();
     setRefreshing(false);
   }, [refreshing, fetchScreenshot]);
 
@@ -78,6 +90,7 @@ function QRLoginPanel({ onLoginDetected }) {
     return () => {
       clearInterval(refreshRef.current);
       clearInterval(pollRef.current);
+      if (imgSrcRef.current) URL.revokeObjectURL(imgSrcRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -109,7 +122,7 @@ function QRLoginPanel({ onLoginDetected }) {
         ) : (
           <div className="flex flex-col items-center gap-3 py-12 text-[var(--text-tertiary)]">
             {qrError
-              ? <><AlertCircle size={28} className="text-amber-400" /><p className="text-xs">截图服务不可用<br/>请确认 dingtalk-qr.service 已启动</p>
+              ? <><AlertCircle size={28} className="text-amber-400" /><p className="text-xs">截图加载失败<br/>请重试或确认访问令牌</p>
                 <button onClick={refreshQR} className="mt-2 rounded-lg bg-[var(--hover-bg)] px-4 py-1.5 text-xs text-white hover:bg-[var(--accent)]/20 transition">
                   <RefreshCw size={11} className={`mr-1 inline ${refreshing ? "animate-spin" : ""}`} />重试
                 </button></>
