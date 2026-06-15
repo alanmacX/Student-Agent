@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="900" viewBox="0 0 1320 900" role="img" aria-labelledby="title desc">
+  <title id="title">Student-Agent 中文架构图</title>
+  <desc id="desc">透明背景的矢量架构图，展示前端、FastAPI、Agent、后台任务、SQLite 数据库和外部系统之间的数据流。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#374151"/>
+    </marker>
+    <style>
+      .title { font: 700 34px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #111827; }
+      .subtitle { font: 500 16px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #4b5563; }
+      .group-title { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #111827; }
+      .label { font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #111827; }
+      .text { font: 500 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #374151; }
+      .small { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #4b5563; }
+      .tiny { font: 500 11px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #6b7280; }
+      .group { fill: #ffffff; stroke: #111827; stroke-width: 1.6; }
+      .box { fill: #ffffff; stroke: #374151; stroke-width: 1.3; }
+      .subbox { fill: #ffffff; stroke: #9ca3af; stroke-width: 1; }
+      .line { fill: none; stroke: #374151; stroke-width: 2; marker-end: url(#arrow); }
+      .thin { fill: none; stroke: #6b7280; stroke-width: 1.5; marker-end: url(#arrow); }
+      .dash { fill: none; stroke: #6b7280; stroke-width: 1.7; stroke-dasharray: 7 7; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <text x="60" y="58" class="title">Student-Agent 架构</text>
+  <text x="60" y="88" class="subtitle">学生个人 AI 日程管家：自托管前端、FastAPI 后端、SQLite 数据库、可审计 Agent 和后台同步任务。</text>
+
+  <!-- Client -->
+  <rect x="60" y="130" width="260" height="245" rx="18" class="group"/>
+  <text x="86" y="164" class="group-title">用户入口</text>
+  <rect x="86" y="188" width="208" height="38" rx="10" class="subbox"/>
+  <text x="108" y="212" class="label">React PWA</text>
+  <rect x="86" y="238" width="208" height="30" rx="8" class="subbox"/>
+  <text x="104" y="258" class="text">总览 / Agent / Hub</text>
+  <rect x="86" y="278" width="208" height="30" rx="8" class="subbox"/>
+  <text x="104" y="298" class="text">通知中心 / 设置页</text>
+  <rect x="86" y="318" width="208" height="30" rx="8" class="subbox"/>
+  <text x="104" y="338" class="text">REST + SSE + Web Push</text>
+
+  <!-- API -->
+  <rect x="405" y="130" width="270" height="245" rx="18" class="group"/>
+  <text x="431" y="164" class="group-title">FastAPI 服务层</text>
+  <rect x="431" y="188" width="218" height="34" rx="9" class="subbox"/>
+  <text x="450" y="210" class="text">访问令牌中间件</text>
+  <rect x="431" y="232" width="218" height="34" rx="9" class="subbox"/>
+  <text x="450" y="254" class="text">会话 / Dashboard / 设置</text>
+  <rect x="431" y="276" width="218" height="34" rx="9" class="subbox"/>
+  <text x="450" y="298" class="text">提醒 / 推送 / 数据管理</text>
+  <rect x="431" y="320" width="218" height="34" rx="9" class="subbox"/>
+  <text x="450" y="342" class="text">学习通 / 钉钉 / 教务</text>
+
+  <!-- Agent -->
+  <rect x="760" y="130" width="500" height="245" rx="18" class="group"/>
+  <text x="786" y="164" class="group-title">Agent 编排</text>
+  <rect x="786" y="190" width="188" height="72" rx="12" class="box"/>
+  <text x="808" y="218" class="label">Light Router</text>
+  <text x="808" y="242" class="text">选择最小工具集合</text>
+  <rect x="1040" y="190" width="194" height="72" rx="12" class="box"/>
+  <text x="1062" y="218" class="label">Schedule Agent</text>
+  <text x="1062" y="242" class="text">基于证据回答和规划</text>
+  <path d="M976 226 L1030 226" class="line"/>
+  <rect x="786" y="292" width="448" height="34" rx="9" class="subbox"/>
+  <text x="808" y="314" class="text">写操作先进入确认队列，用户确认后才执行</text>
+  <rect x="786" y="336" width="448" height="24" rx="7" class="subbox"/>
+  <text x="808" y="353" class="tiny">回答、工具调用、结构化 payload、token 用量随 SSE 返回并落库</text>
+
+  <!-- Tool layer -->
+  <rect x="405" y="475" width="390" height="285" rx="18" class="group"/>
+  <text x="431" y="509" class="group-title">工具与领域服务</text>
+  <rect x="431" y="532" width="338" height="38" rx="10" class="subbox"/>
+  <text x="451" y="556" class="text">只读查询：schema / 当前时间 / 宽搜 / SQL</text>
+  <rect x="431" y="584" width="338" height="38" rx="10" class="subbox"/>
+  <text x="451" y="608" class="text">领域写入：提醒 / 日历 / 课程 / 推送</text>
+  <rect x="431" y="636" width="338" height="38" rx="10" class="subbox"/>
+  <text x="451" y="660" class="text">学习通：课程 / 作业 / 消息 Memory</text>
+  <rect x="431" y="688" width="338" height="38" rx="10" class="subbox"/>
+  <text x="451" y="712" class="text">钉钉：消息同步 / 分类 / 记忆任务</text>
+
+  <!-- Data layer -->
+  <rect x="865" y="475" width="395" height="285" rx="18" class="group"/>
+  <text x="891" y="509" class="group-title">SQLite 数据层</text>
+  <rect x="891" y="532" width="343" height="38" rx="10" class="subbox"/>
+  <text x="911" y="556" class="text">课程 / 日历 / 提醒 / 作业 / 消息</text>
+  <rect x="891" y="584" width="343" height="38" rx="10" class="subbox"/>
+  <text x="911" y="608" class="text">Memory / 点子 / 关注项 / 知识事实</text>
+  <rect x="891" y="636" width="343" height="38" rx="10" class="subbox"/>
+  <text x="911" y="660" class="text">通知 / 审计 / 会话 / token 用量</text>
+  <rect x="891" y="688" width="343" height="38" rx="10" class="subbox"/>
+  <text x="911" y="712" class="text">WAL 并发读写，时间统一存 UTC ISO</text>
+
+  <!-- Jobs and external -->
+  <rect x="60" y="475" width="260" height="285" rx="18" class="group"/>
+  <text x="86" y="509" class="group-title">后台任务</text>
+  <rect x="86" y="532" width="208" height="34" rx="9" class="subbox"/>
+  <text x="104" y="554" class="text">学习通增量扫描</text>
+  <rect x="86" y="576" width="208" height="34" rx="9" class="subbox"/>
+  <text x="104" y="598" class="text">钉钉 60 秒同步</text>
+  <rect x="86" y="620" width="208" height="34" rx="9" class="subbox"/>
+  <text x="104" y="642" class="text">截止检查 / 定时通知</text>
+  <rect x="86" y="664" width="208" height="34" rx="9" class="subbox"/>
+  <text x="104" y="686" class="text">每日开始 / 晚间摘要</text>
+  <rect x="86" y="708" width="208" height="34" rx="9" class="subbox"/>
+  <text x="104" y="730" class="text">健康监控 / 记忆清理</text>
+
+  <rect x="60" y="802" width="1200" height="58" rx="16" class="group"/>
+  <text x="86" y="827" class="small">外部系统</text>
+  <text x="178" y="827" class="text">LLM Provider</text>
+  <text x="338" y="827" class="text">学习通</text>
+  <text x="458" y="827" class="text">钉钉</text>
+  <text x="562" y="827" class="text">正方教务</text>
+  <text x="704" y="827" class="text">浏览器 Push 服务</text>
+  <text x="892" y="827" class="text">HTTPS 反代 / 隧道</text>
+  <text x="1100" y="827" class="text">OpenRouter 价格</text>
+
+  <!-- Main flow -->
+  <path d="M320 252 L395 252" class="line"/>
+  <path d="M675 252 L750 252" class="line"/>
+  <path d="M1010 375 C1010 420 930 433 795 538" class="line"/>
+  <path d="M795 618 L855 618" class="line"/>
+  <path d="M600 475 C600 425 735 404 840 360" class="dash"/>
+  <path d="M320 618 L395 618" class="thin"/>
+  <path d="M320 716 C430 800 760 800 930 760" class="thin"/>
+  <path d="M1030 760 C1010 786 1000 790 990 802" class="thin"/>
+  <path d="M1010 130 C1010 104 1010 104 1010 92" class="thin"/>
+
+  <!-- External flow labels -->
+  <path d="M206 802 C210 776 210 776 210 760" class="thin"/>
+  <path d="M374 802 C420 754 432 724 432 676" class="thin"/>
+  <path d="M472 802 C502 754 514 726 514 728" class="thin"/>
+  <path d="M596 802 C640 758 668 728 686 726" class="thin"/>
+  <path d="M752 802 C830 774 892 756 948 726" class="thin"/>
+  <path d="M1155 802 C1125 766 1118 748 1118 728" class="thin"/>
+
+  <!-- Guardrails -->
+  <rect x="760" y="405" width="500" height="40" rx="12" class="box"/>
+  <text x="786" y="430" class="small">安全边界：API 访问令牌 / 只读 SQL 白名单 / 敏感字段屏蔽 / 写操作确认 / 审计日志</text>
+</svg>

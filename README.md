@@ -1,106 +1,139 @@
-# Student-Agent v2
+# Student-Agent
 
-一个自托管的学生个人 AI 日程管家。它同步学习通、钉钉、本地日程和提醒，把高价值信息沉淀到统一数据库，并通过一个按需查询的 Schedule Agent 帮你调查、整理和执行任务。
+Student-Agent 是一个自托管的学生个人 AI 日程管家。它把课程、提醒、日历、学习通、钉钉、通知、点子和长期记忆集中到一套本地数据库里，再通过网页端和 Schedule Agent 帮你查询、规划、确认操作和接收推送。
 
-v2 的核心变化：不再把 48 小时上下文硬塞进 prompt，也不再用硬编码 intent 决定工具。现在是 **light router 先选工具，主 agent 再按需只读查询数据库**；dashboard 也从独立 briefing 服务改成基于数据库 hash 的轻量刷新。
+项目面向真实日常使用：前端是可安装的 React PWA，后端是 FastAPI + SQLite + APScheduler，部署用 Docker Compose + Nginx。所有核心数据留在自己的服务器上，LLM Provider、模型、预算和提示词都可以在设置里调整。
 
-![Student-Agent v2 architecture](docs/architecture-v2.svg)
+![Student-Agent 架构图](docs/architecture.svg)
 
-## 当前架构
+## 核心能力
 
-前端是 React + Vite PWA，后端是 FastAPI + SQLite + APScheduler，部署层是 Docker Compose + Nginx。
+### 日程总览
 
-Agent 链路分成两层：
+- **今日优先级**：首页汇总今天课程、日历事件、提醒、学习通作业、重要消息记忆和待发通知，生成“该先做这些”的行动列表。
+- **课程表视图**：按周展示本地课程表和教务导入课程，支持地点、时间、学期信息和当天焦点事项。
+- **长期事项**：把未来 7-90 天内的日历、提醒、作业和重要记忆放入长期视野，避免只盯今天。
+- **轻量刷新**：Dashboard 先直接读数据库构造 payload，只有内容 hash 变化时才触发 briefing 生成，普通打开页面不会反复消耗 LLM。
 
-- **Light Router / Briefing Agent**：便宜、快，只负责两件事：给当前 query 选择最小工具清单；在 dashboard 数据 hash 变化时生成最多 5 个行动项（todo）。首页不再渲染自然语言总结句，只保留「该先做这些」列表。
-- **Detailed Schedule Agent**：负责真实回答和执行。它拿到 light router 给的工具清单后，通过工具主动拉取证据，不再依赖预注入的大块 context。
+### Schedule Agent
 
-这里不是“两个数据库工具模式”。真正的工具面是：
+- **会话式查询**：可以问“今天有什么课”“最近有哪些 DDL”“计组相关通知有哪些”“帮我查一下钉钉消息”等问题。
+- **按需取证**：Agent 先由 Light Router 选择最小工具集合，再通过只读数据库查询、领域读取工具或外部同步服务拉取证据。
+- **结构化结果**：课程、提醒、日历、学习通作业、消息记忆和操作结果会随 SSE 一起返回给前端，前端展示为可扫描的卡片。
+- **追问承接**：上一轮结构化结果会压缩成 id 映射，用户说“这些”“上面那些”“都删掉”时可以准确解析对象。
+- **确认门**：创建、更新、完成、删除、导入、推送等写操作都会进入确认队列，前端确认后才执行。
+- **审计记录**：Agent 的写操作会写入 `agent_audit_log`，Hub 里可以查看最近执行过的操作。
 
-- `get_current_time`：返回 Asia/Shanghai 与 UTC 的当前时间、今天、本周窗口。
-- `get_data_schema`：告诉 agent 哪些表能查、时间字段怎么用、importance/tier 怎么理解。
-- `search_database`：只读 SQL 查询。只允许 `SELECT` 和 `PRAGMA table_info`，只允许业务白名单表，屏蔽 token/cookie/key 等敏感字段。
-- `get_record_detail`：对某条白名单记录拉更完整字段。
-- 领域工具：课程、提醒、日历、学习通、消息、知识库、推送等。写操作仍走确认门，不会让 agent 自由写 SQL。
+### 学习通
 
-`search_database` 自带 `detail_level=brief|detailed`，它只控制返回字段截断长度；不是另一个 agent 模式。常规回答用 `brief`，需要核对原文或追问细节时再拉 `detailed`。
+- **扫码登录与课程缓存**：后端维护学习通会话，拉取课程、作业和近期消息。
+- **作业跟踪**：待提交作业进入总览、Hub 和 Agent 查询范围，截止时间会参与优先级排序。
+- **Memory Agent**：学习通消息会被提炼成 `chaoxing_memory_entries`，保留标题、摘要、原因、行动建议、重要度和过期时间。
+- **增量扫描**：默认只扫描有变化的会话，也可以按需重扫全部或指定会话。
+- **消息去重**：通过 message id、会话状态和 fingerprint 降低重复提炼。
 
-## 数据获取策略
+### 钉钉
 
-旧版：
+- **消息同步**：后台任务定时读取钉钉消息，按重要通知和兴趣信息分桶。
+- **分类过滤**：课程、私聊、通知、竞赛、讲座等消息会进入不同查询桶，Agent 可以按场景读取。
+- **健康监控**：健康检查会报告钉钉同步状态，便于发现扫码、服务或 WAL 卡住的问题。
+- **独立服务脚本**：仓库提供 systemd 和启动脚本，用于在服务器上运行钉钉相关进程。
 
-```text
-server 预查 48h 数据 -> 拼进 build_turn_context() -> agent 被动读取
-硬编码关键词 intent -> 固定工具清单
-dashboard_briefing 服务 -> 独立生成首页文案
-```
+### 教务课程
 
-v2：
+- **正方教务接入**：设置页可配置学号、学期、第一周周一等信息，并导入课程表。
+- **凭据保护**：教务密码可用 `ZJUT_KEY` 做 AES-GCM 加密保存，也可以不保存凭据。
+- **本地课程归一**：导入后的课程写入 `server_courses`，与日历事件分开，Agent 查询时不会混淆课程和 Calendar。
+- **自然语言导入**：Agent 也能根据用户确认过的课程清单生成本地课程表，支持周次、单双周、节次和教室。
 
-```text
-用户 query -> light router 选工具 -> detailed agent 按需调用只读查询工具
-dashboard /today -> SQL payload builder -> hash 变化才触发 light briefing
-时间输入 -> Asia/Shanghai 解析 -> UTC ISO 存储和比较
-```
+### 提醒、日历和推送
 
-这个改法保留现有数据库结构、importance、hierarchy_tier 和业务工具，只改变数据进入 agent 的方式：从“推”变成“拉”。
+- **提醒管理**：支持创建、更新、完成、删除提醒，字段包括标题、截止时间、备注、清单和重要标记。
+- **日历事件**：支持创建、更新、删除服务器维护的日历事件，可按时间范围和关键词查询。
+- **定时推送**：Agent 可以在确认后安排未来某个时间点的 Web Push。
+- **截止提醒**：后台每 5 分钟检查截止事项，避免作业和提醒被遗漏。
+- **每日推送**：每天 7:30 发送开始提醒，22:00 发送晚间摘要。
+- **送达反馈**：推送记录会保存发送、送达、点击、忽略等状态，通知中心可以查看。
 
-## Token 策略
+### Hub 和点子库
 
-v2 的省 token 点：
+- **Hub 工作台**：集中显示下一件事、行动项、时间线、长期事项、预算、健康状态、审计和提醒面板。
+- **点子库**：随手保存灵感和想法，独立于日程和消息流水，不会自动参与提醒。
+- **数据扫描**：Hub 使用同一份 dashboard payload，因此首页、Hub 和 Agent 对同一批事项有一致口径。
 
-- 去掉每轮 `build_turn_context()` 的 48h 全量注入。
-- 聊天历史窗口从 40 条缩到 12 条，长期事实必须由数据库工具拉取。
-- light router 只输出 JSON 工具名，模型可在 Settings 单独选更便宜的。
-- dashboard briefing 只在内容 hash 变化时刷新，普通打开首页不跑 LLM。
-- tool result 默认 brief 截断，细节只在必要时二次查询。
-- router、dashboard briefing、agent loop 都写入 token 预算表，账不会漏。
+### 模型、预算和数据
 
-可重复跑 token 对比：
+- **多 Provider**：支持内置 provider 和自定义 OpenAI 兼容接口，设置页可以拉模型列表、测试连通性和查看余额。
+- **DeepSeek 优化**：DeepSeek 可配置思考模式，并支持缓存计费估算。
+- **Token 预算**：聊天、Schedule Agent、Router、Dashboard Briefing 和后台任务都会记录 token 用量。
+- **价格管理**：内置常见模型价格，也可以从 OpenRouter 刷新或手动覆盖。
+- **导入导出**：数据管理页可以导出/导入主要业务表，服务器脚本支持 SQLite 数据库和 `.env` 打包迁移。
 
-```bash
-cd server-src
-ACCESS_TOKEN=xxx BASE_URL=https://your-domain \
-  python3 scripts/token_compare.py --label v2 --out /tmp/v2-tokens.json
-```
+## 架构说明
 
-如果有旧版结果：
+### 前端
 
-```bash
-python3 scripts/token_compare.py \
-  --base-url https://your-domain \
-  --token xxx \
-  --baseline-json /tmp/baseline-tokens.json \
-  --label v2
-```
+- `server-src/frontend`：React + Vite + Tailwind PWA。
+- 主要入口：`总览`、`Agent`、`Hub`、`通知`、`设置`。
+- 与后端通信：REST 负责列表、设置和数据管理；SSE 负责 Agent 流式回答、工具调用、结构化 payload 和确认状态。
+- Push：浏览器注册 Web Push 订阅后，后端可以发送提醒、摘要和 Agent 安排的通知。
 
-## 时间口径
+### 后端
 
-统一规则：
+- `server-src/backend/app/main.py`：FastAPI 应用、鉴权中间件、健康检查和路由挂载。
+- `routers/`：对外 API，包括会话、Schedule Agent、Dashboard、提醒、设置、Provider、推送、学习通、钉钉、教务、分析和数据管理。
+- `services/`：Agent 编排、工具路由、只读查询、日程存储、学习通、钉钉、知识库、预算、价格、推送和时间处理。
+- `tasks/`：APScheduler 后台任务，包括学习通同步、钉钉同步、推送发送、每日摘要、memory 清理、蒸馏和健康监控。
 
-- 用户无时区输入按 `Asia/Shanghai` 解释。
-- 数据库存储和 SQL 比较统一用 UTC ISO，例如 `2026-06-12T10:30:00+00:00`。
-- dashboard、agent schema、查询工具都暴露本地日/周窗口对应的 UTC 边界。
-- 钉钉毫秒 epoch 会在查询说明中标注，避免和 ISO 字符串混用。
+### 数据层
 
-核心实现位于 `server-src/backend/app/services/time_utils.py`。
+- SQLite 数据库默认位于容器数据卷 `/data/chatbot.db`。
+- 启动时自动运行幂等 migration，并开启 WAL 模式。
+- 主要业务表：
+  - `server_courses`：本地课程表。
+  - `server_events`：日历事件。
+  - `server_reminders`：提醒事项。
+  - `chaoxing_assignments`：学习通作业缓存。
+  - `chaoxing_memory_entries`：学习通/消息提炼后的行动记忆。
+  - `dingtalk_messages`：钉钉消息筛选结果。
+  - `scheduled_notifications`、`notification_log`：待发和已发推送。
+  - `schedule_sessions`、`schedule_messages`：Schedule Agent 会话。
+  - `settings`、`custom_providers`、`llm_budget_log`：配置和模型用量。
 
-## Prompt 清单
+### Agent 数据流
 
-当前需要维护的 prompt 有四类：
+1. 用户在前端发送问题，前端通过 SSE 调用 `/api/schedule/sessions/{id}/chat`。
+2. 后端保存用户消息，读取近期对话和上一轮结构化结果。
+3. Light Router 读取用户问题、历史和工具清单，输出本轮最小工具集合。
+4. Schedule Agent 根据工具结果回答；涉及用户数据的问题必须先调用读取工具取证。
+5. 只读工具可以查询白名单业务表、获取 schema、读取单条详情或拿当前时间窗口。
+6. 写操作不会直接落库，会先排入确认队列。
+7. 用户在前端确认后，后端执行领域工具，写入业务表并记录审计。
+8. 最终回答、token 用量和结构化 payload 写回数据库并返回前端。
 
-- `schedule_agent.STATIC_SYSTEM_PROMPT`：主 agent 行为约束。现在保持短 prompt，要求事实来自工具结果，不再塞业务上下文。
-- `tool_router.select_tools_for_query()`：light router，只输出工具名 JSON。这里要避免写“回答用户”类指令。
-- `dashboard_v2._briefing_system_prompt()`：首页轻 briefing，只基于输入 JSON 输出结构化 todo 列表（不再输出自然语言总结句）。
-- 同步/过滤类 prompt：学习通 memory 提炼、钉钉过滤、standby push 决策。它们仍是各自模块的局部 prompt，不参与 schedule chat 的 context 注入。
+### Dashboard 数据流
 
-Prompt 维护原则：主 agent 要少背规则，多看证据；router 要少选工具；dashboard briefing 要短、可缓存、可失败回退。
+1. `/api/dashboard/today` 从 SQLite 拉取今天、本周、未来 90 天和通知反馈数据。
+2. 后端构造统一 payload，并对关键字段生成 hash。
+3. hash 未变化时直接返回缓存 briefing。
+4. hash 变化时异步触发 Light Briefing，把 payload 压缩为最多 5 个行动项。
+5. 前端总览和 Hub 使用同一 payload 展示今日、时间线、长期事项、预算和系统状态。
+
+### 安全边界
+
+- **访问令牌**：所有 `/api/*` 默认受 `.env` 的 `ACCESS_TOKEN` 保护。留空表示不鉴权，只适合本地或可信内网。
+- **只读 SQL**：`search_database` 只允许 `SELECT` 和 `PRAGMA table_info`，并限制在业务白名单表内。
+- **敏感字段屏蔽**：查询工具会拒绝 token、cookie、key、password、secret、endpoint 等敏感字段。
+- **写操作确认**：Agent 的创建、更新、删除、完成、导入和推送都必须经过确认队列。
+- **时间统一**：用户无时区输入按 `Asia/Shanghai` 解析；数据库比较和存储使用 UTC ISO。
+- **HTTPS 建议**：公网部署必须在前面加 HTTPS 反代或隧道，源站不要直接暴露未加密 HTTP。
+- **生产调试**：`DEBUG=false` 时不会挂载 `/api/debug/*`。
 
 ## 快速部署
 
-服务器要求：
+服务器建议：
 
-- Linux，推荐 Ubuntu 22.04+ 或 Debian 12+
+- Ubuntu 22.04+ 或 Debian 12+
 - Docker + Docker Compose v2
 - 一个 OpenAI 兼容或内置支持的 LLM Provider
 
@@ -112,164 +145,113 @@ cd /opt/chatbot/server-src
 bash install.sh
 ```
 
-`install.sh` 会交互生成 `.env`，**自动生成 `ACCESS_TOKEN`**（默认开启鉴权），
-并在结尾打印出来——首次打开网页时输入一次即可。**公网访问请自行在前面加一层
-HTTPS 反代/隧道**（见下「安全」），裸 HTTP 会泄露令牌和数据。
+`install.sh` 会交互生成 `.env`，默认自动生成 `ACCESS_TOKEN`。首次打开网页时输入一次访问令牌即可。
 
-升级 / 部署（唯一推荐路径）：
+升级：
 
 ```bash
 cd /opt/chatbot
 bash server-src/upgrade.sh
 ```
 
-部署模型是**源码进镜像**：所有改动先提交进 git，`upgrade.sh` 走
-`git pull --ff-only → docker compose build → docker compose up -d → 健康检查`。
-不要再用 `docker cp` 往运行中的容器塞代码——那是已废弃的旧流程，`compose up` 会冲掉它。
-改 `.env` 后同样必须 `compose up`：`docker restart` **不会**重新加载 `env_file`
-（环境变量在创建容器时注入）。三端（本地 / GitHub / 服务器）应始终停在同一个 commit：
-服务器是一个干净的 git 检出，本地改 → push → 服务器 `upgrade.sh`。
+`upgrade.sh` 的默认流程：
 
-`upgrade.sh` 默认从当前源码构建 backend/frontend，启动容器，并检查
-`GET /health` 与 `GET /api/dashboard/today`。常用参数：
-
-- `--skip-pull`：不拉 git。
-- `--skip-build`：不重建镜像，只重启。
-- `--pull-images`：优先拉 ghcr 预构建镜像。
-- `--no-healthcheck`：跳过部署后健康检查。
-
-## 安全 / 访问控制
-
-- **访问令牌**：所有 `/api/*` 由 `.env` 的 `ACCESS_TOKEN` 保护（中间件见
-  `backend/app/main.py`）。**留空 = 完全不鉴权，禁止用于公网。** 用
-  `openssl rand -hex 24` 生成；网页首次访问输入一次存浏览器，Siri 快捷指令用
-  `?token=<值>`。少数公开端点（VAPID 公钥、推送回执）在 `PUBLIC_API_PATHS` 白名单内。
-- **HTTPS 在源站强制**：`nginx.conf` 用 `X-Forwarded-Proto` 判断并 308 跳转，再发
-  `Strict-Transport-Security`（HSTS）等安全头。与 CDN 厂商无关——换任何会转发该头的
-  CDN/反代都生效；可信代理会覆盖该头，客户端无法伪造。前提铁律：**源站不暴露公网，
-  只接受来自隧道 / 可信 CDN 回源的连接**，否则该头可被绕过伪造。
-- **生产关闭调试**：`DEBUG=false`，`/api/debug/*` 不挂载。
-- **密钥只进 `.env`**：`.env` 已被 `.gitignore` 排除，不进 git，仓库内只有
-  `.env.example` 模板。LLM key、`DINGTALK_AES_KEY`、`VAPID_PRIVATE_KEY`、`ZJUT_KEY`
-  都从环境读取，源码中无硬编码密钥。
-
-## 公网 HTTPS（复制即用）
-
-`install.sh` 装出来是 `http://IP:80`。公网使用**必须**在前面加一层 HTTPS。任选其一，
-都让源站只听本地 80、不直接暴露公网：
-
-**方案 A — Cloudflare Tunnel**（源站零暴露，无需开放入站端口、无需自己管证书）：
-
-```bash
-# 在服务器上
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
-chmod +x /usr/local/bin/cloudflared
-cloudflared tunnel login                      # 浏览器授权你的域名
-cloudflared tunnel create student-agent
-# /etc/cloudflared/config.yml:
-#   tunnel: <上一步的 tunnel id>
-#   credentials-file: /root/.cloudflared/<id>.json
-#   ingress:
-#     - hostname: your.domain.com
-#       service: http://localhost:80
-#     - service: http_status:404
-cloudflared tunnel route dns student-agent your.domain.com
-cloudflared service install && systemctl restart cloudflared
+```text
+git pull --ff-only
+docker compose build
+docker compose up -d
+检查 /health 和 /api/dashboard/today
 ```
 
-Cloudflare 边缘自动签发/续期证书，并发 `X-Forwarded-Proto` —— 源站的 `nginx.conf`
-会据此强制 HTTPS。**别把域名 DNS 直接 A 记录指向服务器 IP**，只用隧道的 CNAME。
+常用参数：
 
-**方案 B — Caddy 自动 HTTPS**（自己的机器直连公网、80/443 可入站时）：
+- `--skip-pull`：不拉取远端代码。
+- `--skip-build`：不重建镜像，只重启服务。
+- `--pull-images`：优先拉取 ghcr 预构建镜像。
+- `--no-healthcheck`：跳过部署后健康检查。
+
+## 公网 HTTPS
+
+### Cloudflare Tunnel
+
+适合不想开放服务器入站端口的场景：
+
+```bash
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+chmod +x /usr/local/bin/cloudflared
+cloudflared tunnel login
+cloudflared tunnel create student-agent
+cloudflared tunnel route dns student-agent your.domain.com
+cloudflared service install
+systemctl restart cloudflared
+```
+
+`/etc/cloudflared/config.yml` 示例：
+
+```yaml
+tunnel: <tunnel id>
+credentials-file: /root/.cloudflared/<id>.json
+ingress:
+  - hostname: your.domain.com
+    service: http://localhost:80
+  - service: http_status:404
+```
+
+### Caddy
+
+适合服务器可以开放 80/443 的场景：
 
 ```caddyfile
-# /etc/caddy/Caddyfile
 your.domain.com {
-    reverse_proxy localhost:80      # 转发到本项目的 nginx
+    reverse_proxy localhost:80
 }
 ```
 
+建议把项目 Nginx 端口绑定到 `127.0.0.1:80:80`，让 Caddy 独占公网 80/443。
+
+## 迁移和备份
+
+备份当前服务器：
+
 ```bash
-# 把 docker-compose 的 nginx 端口从 80:80 改成 127.0.0.1:80:80（只听本地），
-# 让 Caddy 独占公网 80/443，然后：
-systemctl reload caddy
+cd /opt/chatbot
+bash server-src/scripts/backup.sh
 ```
 
-Caddy 自动申请并续期 Let's Encrypt 证书，并默认转发 `X-Forwarded-Proto`。
-
-## 迁移到新服务器（无痛）
-
-数据全在一个 SQLite 库里，迁移 = 导出 db + `.env` → 新机导入。`.env` 一并带走，
-**访问令牌和推送密钥不变**，旧网页 / 手机 / Siri 快捷指令无需重新登录。
+恢复到新服务器：
 
 ```bash
-# ① 旧服务器：一键导出（db + .env 打成一个包）
-cd /opt/chatbot && bash server-src/scripts/backup.sh
-#   → student-agent-backup-<时间>.tgz
-
-# ② 传到新服务器
-scp student-agent-backup-*.tgz newserver:/tmp/
-
-# ③ 新服务器：照常安装，再导入
 git clone https://github.com/alanmacX/Student-Agent.git /opt/chatbot
-cd /opt/chatbot/server-src && bash install.sh
-bash server-src/scripts/restore.sh /tmp/student-agent-backup-*.tgz
+cd /opt/chatbot/server-src
+bash install.sh
+bash scripts/restore.sh /tmp/student-agent-backup-*.tgz
 ```
 
-`restore.sh` 会停 backend、把旧库写进数据卷、用旧 `.env` 覆盖（新装生成的 `.env`
-留作 `.env.fresh.*`），再 `--force-recreate` 重启让令牌生效。钉钉登录是设备态、不随
-库迁移，新机在 Settings → 钉钉 重新扫码即可；学习通同理。
-
-## 设置
-
-所有 provider 平等支持（任何 OpenAI 兼容接口）。**推荐 DeepSeek**——代码里有
-DeepSeek 专属优化（思考模式、缓存计费、自动重试），性价比好；但**不强制**，用你手上
-有 key 的任意 provider 都行。DeepSeek 已作为内置 provider 预置，填 key 即用。
-
-进入 Settings 后至少确认：
-
-- **Schedule Agent Provider**：主 agent 模型，负责复杂推理和工具调用。
-- **Light Router / Briefing Agent**：工具路由和 dashboard briefing 模型，建议选便宜快速模型。
-- **Filter Provider**：消息过滤/提炼使用的模型。
-- **Token Budget**：每日预算；analytics 会汇总 chat、schedule、standby、router、dashboard briefing。
+备份包包含数据库和 `.env`。恢复后访问令牌、推送密钥和模型配置保持一致；学习通、钉钉这类设备态登录通常需要在设置页重新扫码。
 
 ## 本地验证
 
+后端语法检查：
+
 ```bash
-# 后端语法检查
 python3 -m compileall server-src/backend/app
+```
 
-# 前端构建
-cd server-src/frontend && npm run build
+前端构建：
 
-# token 采样
-cd ../
+```bash
+cd server-src/frontend
+npm run build
+```
+
+Token 采样：
+
+```bash
+cd server-src
 BASE_URL=http://localhost ACCESS_TOKEN=xxx python3 scripts/token_compare.py
 ```
 
-## 目录
-
-```text
-.
-├── docs/
-│   └── architecture-v2.svg
-├── server-src/
-│   ├── backend/
-│   │   └── app/
-│   │       ├── routers/
-│   │       ├── services/
-│   │       ├── memory/
-│   │       └── tasks/
-│   ├── frontend/
-│   ├── scripts/
-│   │   └── token_compare.py
-│   ├── docker-compose.yml
-│   ├── install.sh
-│   └── upgrade.sh
-└── README.md
-```
-
-## 运维排查
+运维排查：
 
 ```bash
 cd /opt/chatbot/server-src
@@ -279,4 +261,36 @@ curl -fsS http://localhost/health
 curl -fsS -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost/api/dashboard/today
 ```
 
-如果 agent 回答短视，优先检查该轮 SSE 里是否出现了 `search_database` / `get_data_schema` 工具调用；如果没有，先看 light router 输出和 fallback 工具清单。
+## 目录速览
+
+```text
+.
+├── docs/
+│   └── architecture.svg
+├── server-src/
+│   ├── backend/
+│   │   ├── app/
+│   │   │   ├── routers/
+│   │   │   ├── services/
+│   │   │   ├── tasks/
+│   │   │   ├── dingtalk/
+│   │   │   ├── chaoxing/
+│   │   │   └── memory/
+│   │   └── tests/
+│   ├── frontend/
+│   ├── scripts/
+│   ├── docker-compose.yml
+│   ├── install.sh
+│   └── upgrade.sh
+└── README.md
+```
+
+## 关键文件
+
+- `server-src/backend/app/services/schedule_agent.py`：Schedule Agent 主编排和工具定义。
+- `server-src/backend/app/services/tool_router.py`：Light Router 工具选择。
+- `server-src/backend/app/services/agent_data_tools.py`：白名单只读查询和 schema 暴露。
+- `server-src/backend/app/services/dashboard_v2.py`：Dashboard payload、hash 和 briefing 缓存。
+- `server-src/backend/app/services/schedule_store.py`：提醒、日历事件和课程表的领域写入。
+- `server-src/backend/app/tasks/scheduler.py`：后台任务注册。
+- `server-src/frontend/src/components/`：总览、Agent、Hub、通知和设置界面。
