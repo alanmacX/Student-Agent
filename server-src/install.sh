@@ -80,6 +80,21 @@ if [[ ! -f .env ]]; then
   echo "  ┌─ 必要配置 ────────────────────────────────────┐"
   echo ""
 
+  # Access token — generate one by default so a fresh install is NOT an open,
+  # unauthenticated service. Empty token = no auth = anyone can read/write.
+  GEN_TOKEN=""
+  if command -v openssl &>/dev/null; then
+    GEN_TOKEN=$(openssl rand -hex 24)
+  elif command -v python3 &>/dev/null; then
+    GEN_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(24))")
+  fi
+  if [[ -n "$GEN_TOKEN" ]]; then
+    sed -i "s|^ACCESS_TOKEN=.*|ACCESS_TOKEN=${GEN_TOKEN}|" .env
+    ok "已生成访问令牌 ACCESS_TOKEN（默认开启鉴权）"
+  else
+    warn "未找到 openssl/python3，未能自动生成 ACCESS_TOKEN。请手动在 .env 设置，否则接口无鉴权！"
+  fi
+
   # Standby agent provider
   read -rp "  LLM Provider (openai/anthropic/custom) [openai]: " PROVIDER
   PROVIDER="${PROVIDER:-openai}"
@@ -118,6 +133,22 @@ print(v.public_key())
   ok ".env 已创建"
 else
   ok ".env 已存在，跳过交互配置"
+  # Safety net: an existing .env with an empty ACCESS_TOKEN means an open server.
+  if ! grep -qE '^ACCESS_TOKEN=.+' .env; then
+    GEN_TOKEN=""
+    command -v openssl &>/dev/null && GEN_TOKEN=$(openssl rand -hex 24)
+    [[ -z "$GEN_TOKEN" ]] && command -v python3 &>/dev/null && GEN_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(24))")
+    if [[ -n "$GEN_TOKEN" ]]; then
+      if grep -q '^ACCESS_TOKEN=' .env; then
+        sed -i "s|^ACCESS_TOKEN=.*|ACCESS_TOKEN=${GEN_TOKEN}|" .env
+      else
+        echo "ACCESS_TOKEN=${GEN_TOKEN}" >> .env
+      fi
+      warn "检测到 .env 未设 ACCESS_TOKEN，已自动生成（默认开启鉴权）"
+    else
+      warn "⚠ .env 的 ACCESS_TOKEN 为空且无法自动生成 → 接口当前无鉴权，请尽快手动设置！"
+    fi
+  fi
 fi
 
 # Port
@@ -307,6 +338,18 @@ echo ""
 echo -e "${GREEN}  ✓ 安装完成！${NC}"
 echo ""
 echo "  访问地址: http://$(hostname -I | awk '{print $1}'):${PORT}"
+echo ""
+
+# Surface the access token so the user can log in to the web UI.
+TOKEN_VALUE=$(grep -E '^ACCESS_TOKEN=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"'')
+if [[ -n "$TOKEN_VALUE" ]]; then
+  echo -e "  ${YELLOW}访问令牌 (首次打开网页时输入一次):${NC}"
+  echo "    ACCESS_TOKEN = ${TOKEN_VALUE}"
+  echo ""
+fi
+echo -e "  ${YELLOW}⚠ 公网访问务必上 HTTPS${NC}（明文会泄露令牌和数据）:"
+echo "    在前面加一层反代/隧道 (Cloudflare Tunnel、Caddy、nginx+Let's Encrypt 等),"
+echo "    并保证源站不直接暴露公网。详见 README「安全 / 访问控制」。"
 echo ""
 echo "  后续操作:"
 echo "    · 在 Settings → Provider 添加 API Key"

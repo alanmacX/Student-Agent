@@ -109,9 +109,12 @@ Prompt 维护原则：主 agent 要少背规则，多看证据；router 要少�
 ```bash
 git clone https://github.com/alanmacX/Student-Agent.git /opt/chatbot
 cd /opt/chatbot/server-src
-cp .env.example .env && $EDITOR .env   # 至少填 ACCESS_TOKEN（见「安全」）
 bash install.sh
 ```
+
+`install.sh` 会交互生成 `.env`，**自动生成 `ACCESS_TOKEN`**（默认开启鉴权），
+并在结尾打印出来——首次打开网页时输入一次即可。**公网访问请自行在前面加一层
+HTTPS 反代/隧道**（见下「安全」），裸 HTTP 会泄露令牌和数据。
 
 升级 / 部署（唯一推荐路径）：
 
