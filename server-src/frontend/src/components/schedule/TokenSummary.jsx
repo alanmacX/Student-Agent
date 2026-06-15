@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { Coins, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { fetchTokenAnalytics } from "../../api/analytics";
+import { useCurrency, formatCost } from "../../lib/currency";
 
 export default function TokenSummary() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  useCurrency(); // re-render when currency/rate changes
 
   const load = useCallback(async () => {
     try {
@@ -57,7 +59,7 @@ export default function TokenSummary() {
       <div className="text-right">
         <p className="text-xs text-[var(--text-tertiary)]">费用</p>
         <p className="text-sm font-bold tabular-nums text-yellow-400">
-          ${today.cost_usd.toFixed(4)}
+          {formatCost(today.cost_usd)}
         </p>
         {(today.cache_hit_tokens || today.cache_miss_tokens) ? (
           <p className="text-[10px] tabular-nums text-[var(--text-tertiary)]">

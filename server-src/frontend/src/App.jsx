@@ -9,6 +9,7 @@ import NotificationCenter from "./components/notifications/NotificationCenter";
 import HubView from "./components/hub/HubView";
 import DailyPopup from "./components/notifications/DailyPopup";
 import { broadcastAccessToken, setAccessToken } from "./api/client";
+import { useCurrency } from "./lib/currency";
 
 const VALID_TABS = ["overview", "agent", "hub", "notifications", "settings"];
 
@@ -140,6 +141,9 @@ function App() {
       return next;
     });
   }, [tab]);
+
+  // Pull the saved currency preference from the server once on start.
+  useEffect(() => { useCurrency.getState().hydrate(); }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

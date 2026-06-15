@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Coins, TrendingUp, MessageSquare, Bot, Database, Gauge } from "lucide-react";
 import { fetchTokenAnalytics } from "../../api/analytics";
+import { useCurrency, formatCost } from "../../lib/currency";
 
 const PERIODS = [
   { days: 7, label: "7d" },
@@ -18,6 +19,7 @@ export default function TokenStats() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState(7);
+  useCurrency(); // re-render when currency/rate changes
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,7 +81,7 @@ export default function TokenStats() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {[
           { icon: Coins, label: "总 Tokens", value: (totals.input_tokens + totals.output_tokens).toLocaleString(), color: "text-white" },
-          { icon: TrendingUp, label: "预估费用", value: `$${totals.cost_usd.toFixed(4)}`, color: "text-yellow-400" },
+          { icon: TrendingUp, label: "预估费用", value: formatCost(totals.cost_usd), color: "text-yellow-400" },
           { icon: MessageSquare, label: "输入", value: totals.input_tokens.toLocaleString(), color: "text-blue-400" },
           { icon: Bot, label: "输出", value: totals.output_tokens.toLocaleString(), color: "text-emerald-400" },
           { icon: Database, label: "Cache Hit", value: (totals.cache_hit_tokens || 0).toLocaleString(), color: "text-cyan-300" },
@@ -102,7 +104,7 @@ export default function TokenStats() {
               <span className="tabular-nums text-[var(--text-tertiary)]">
                 {((item.input_tokens || 0) + (item.output_tokens || 0)).toLocaleString()} tok
               </span>
-              <span className="tabular-nums text-yellow-300">${(item.cost_usd || 0).toFixed(4)}</span>
+              <span className="tabular-nums text-yellow-300">{formatCost(item.cost_usd || 0)}</span>
               {((item.cache_hit_tokens || 0) > 0 || (item.cache_miss_tokens || 0) > 0) && (
                 <span className="col-span-3 text-[10px] text-[var(--text-tertiary)]">
                   cache hit {(item.cache_hit_tokens || 0).toLocaleString()} · miss {(item.cache_miss_tokens || 0).toLocaleString()}

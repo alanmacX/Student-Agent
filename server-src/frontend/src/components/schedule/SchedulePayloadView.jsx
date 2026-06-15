@@ -1,4 +1,26 @@
-import { CalendarClock, BookOpen, Bell, MessageSquare, CheckCircle2, AlertTriangle, GraduationCap, Calendar } from "lucide-react";
+import { useState } from "react";
+import { CalendarClock, BookOpen, Bell, MessageSquare, CheckCircle2, AlertTriangle, GraduationCap, Calendar, ChevronRight, ChevronDown, Trash2, Pencil, Plus } from "lucide-react";
+
+// Friendly label + icon per mutation tool, so the action row reads like
+// "创建提醒 · 数学作业" instead of dumping the raw {tool,arguments,result} JSON.
+const ACTION_META = {
+  create_reminder:               { label: "创建提醒", icon: Plus,         tone: "text-green-400" },
+  update_reminder:               { label: "修改提醒", icon: Pencil,       tone: "text-blue-400" },
+  complete_reminder:             { label: "完成提醒", icon: CheckCircle2,  tone: "text-emerald-400" },
+  delete_reminder:               { label: "删除提醒", icon: Trash2,        tone: "text-red-400" },
+  create_calendar_event:         { label: "创建日历事件", icon: Plus,      tone: "text-green-400" },
+  update_calendar_event:         { label: "修改日历事件", icon: Pencil,    tone: "text-blue-400" },
+  delete_calendar_event:         { label: "删除日历事件", icon: Trash2,    tone: "text-red-400" },
+  schedule_notification:         { label: "安排通知", icon: Bell,          tone: "text-green-400" },
+  cancel_scheduled_notification: { label: "取消通知", icon: Bell,          tone: "text-red-400" },
+  set_push_config:               { label: "更新推送设置", icon: Bell,      tone: "text-blue-400" },
+};
+
+// Pull a short human-readable summary out of the tool arguments.
+function actionSummary(args) {
+  if (!args || typeof args !== "object") return "";
+  return args.title || args.summary || args.content || args.message || args.text || args.query || args.id || "";
+}
 
 // ── Section header ─────────────────────────────────────────────────────────
 function SectionHeader({ icon: Icon, label, count }) {
@@ -16,18 +38,47 @@ function SectionHeader({ icon: Icon, label, count }) {
 }
 
 // ── Action row ─────────────────────────────────────────────────────────────
+// Backend emits actions as { tool, arguments, result }. Show a tidy one-line
+// summary; tuck the full arguments/result behind a click instead of dumping raw
+// JSON into the bubble.
 function ActionRow({ item }) {
-  const kindIcon = {
-    created: <CheckCircle2 size={14} className="text-green-400" />,
-    updated: <CalendarClock size={14} className="text-blue-400" />,
-    completed: <CheckCircle2 size={14} className="text-emerald-400" />,
-    deleted: <AlertTriangle size={14} className="text-red-400" />,
-  };
-  const icon = kindIcon[item.kind] || <CheckCircle2 size={14} className="text-[var(--accent)]" />;
+  const [open, setOpen] = useState(false);
+
+  // Legacy/simple shape that already carries a summary — render as before.
+  if (item.tool === undefined) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2">
+        <CheckCircle2 size={14} className="text-[var(--accent)]" />
+        <span className="text-sm text-[var(--text-secondary)]">{item.summary || item.title || ""}</span>
+      </div>
+    );
+  }
+
+  const meta = ACTION_META[item.tool] || { label: item.tool, icon: CheckCircle2, tone: "text-[var(--accent)]" };
+  const Icon = meta.icon;
+  const summary = actionSummary(item.arguments);
+  const failed = item.result && typeof item.result === "object" && item.result.ok === false;
+  const detail = JSON.stringify({ arguments: item.arguments, result: item.result }, null, 2);
+
   return (
-    <div className="flex items-center gap-2 px-3 py-2">
-      {icon}
-      <span className="text-sm text-[var(--text-secondary)]">{item.summary || item.title || JSON.stringify(item)}</span>
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--hover-bg)]"
+      >
+        {failed ? <AlertTriangle size={14} className="shrink-0 text-red-400" /> : <Icon size={14} className={`shrink-0 ${meta.tone}`} />}
+        <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-secondary)]">
+          <span className="font-medium text-white">{meta.label}</span>
+          {summary && <span className="text-[var(--text-tertiary)]"> · {summary}</span>}
+          {failed && <span className="text-red-400"> · 失败</span>}
+        </span>
+        {open ? <ChevronDown size={13} className="shrink-0 text-[var(--text-tertiary)]" /> : <ChevronRight size={13} className="shrink-0 text-[var(--text-tertiary)]" />}
+      </button>
+      {open && (
+        <pre className="mx-3 mb-2 max-h-60 overflow-auto rounded-lg bg-[var(--input-bg)] p-2 text-[11px] leading-4 text-[var(--text-tertiary)]">
+{detail}
+        </pre>
+      )}
     </div>
   );
 }

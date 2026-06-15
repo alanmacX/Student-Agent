@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Plus, Trash2, Edit2, RefreshCw, Check, ChevronUp, Wifi, Calculator } from "lucide-react";
 import { apiFetch } from "../../api/client";
+import { useCurrency, formatCost } from "../../lib/currency";
 
 const DEEPSEEK_PRICING = {
   "deepseek-v4-flash": {
@@ -44,6 +45,7 @@ async function deleteProvider(id) {
 const EMPTY_FORM = { name: "", base_url: "", api_key: "", api_type: "openAICompatible", models: [] };
 
 export default function ProviderSettings() {
+  useCurrency(); // re-render the cost estimator when currency/rate changes
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null);
@@ -409,9 +411,12 @@ export default function ProviderSettings() {
         </label>
 
         <div className="space-y-3 border-t border-[var(--border)] pt-4">
-          <div className="flex items-center gap-2">
-            <Calculator size={15} className="text-[var(--accent)]" />
-            <p className="text-sm font-semibold text-white">DeepSeek 花费估算</p>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Calculator size={15} className="text-[var(--accent)]" />
+              <p className="text-sm font-semibold text-white">DeepSeek 花费估算</p>
+            </div>
+            <CurrencyToggle />
           </div>
           <div className="grid gap-2 sm:grid-cols-4">
             <label className="block sm:col-span-1">
@@ -431,8 +436,8 @@ export default function ProviderSettings() {
             <CostInput label="Output" value={costInputs.output} onChange={(value) => setCostInputs((prev) => ({ ...prev, output: value }))} />
           </div>
           <div className="grid gap-2 sm:grid-cols-3">
-            <Metric label="估算费用" value={`$${estimatedCost.toFixed(6)}`} tone="text-yellow-300" />
-            <Metric label="缓存节省" value={`$${cacheSavings.toFixed(6)}`} tone="text-emerald-300" />
+            <Metric label="估算费用" value={formatCost(estimatedCost, 6)} tone="text-yellow-300" />
+            <Metric label="缓存节省" value={formatCost(cacheSavings, 6)} tone="text-emerald-300" />
             <Metric label="模型定位" value={pricing.note} tone="text-white" />
           </div>
           <div className="grid gap-1.5 text-xs text-[var(--text-tertiary)]">
@@ -518,6 +523,42 @@ function Metric({ label, value, tone }) {
     <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
       <p className="text-[10px] uppercase tracking-wide text-[var(--text-tertiary)]">{label}</p>
       <p className={`mt-1 text-sm font-semibold tabular-nums ${tone}`}>{value}</p>
+    </div>
+  );
+}
+
+// Currency switcher — controls how all cost figures display (¥ vs $). Costs are
+// always computed in USD; CNY just multiplies by an editable exchange rate.
+function CurrencyToggle() {
+  const { currency, rate, setCurrency, setRate } = useCurrency();
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex rounded-full border border-[var(--border)] bg-[var(--surface-2)] p-0.5">
+        {["CNY", "USD"].map((c) => (
+          <button
+            key={c}
+            onClick={() => setCurrency(c)}
+            className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+              currency === c ? "bg-[var(--accent)] text-white" : "text-[var(--text-tertiary)] hover:text-white"
+            }`}
+          >
+            {c === "CNY" ? "¥ 人民币" : "$ 美元"}
+          </button>
+        ))}
+      </div>
+      {currency === "CNY" && (
+        <label className="flex items-center gap-1 text-xs text-[var(--text-tertiary)]">
+          汇率
+          <input
+            type="number"
+            step="0.1"
+            min="0"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            className="w-16 rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-2 py-1 text-xs text-white focus:outline-none"
+          />
+        </label>
+      )}
     </div>
   );
 }
