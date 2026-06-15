@@ -109,27 +109,46 @@ Prompt 维护原则：主 agent 要少背规则，多看证据；router 要少�
 ```bash
 git clone https://github.com/alanmacX/Student-Agent.git /opt/chatbot
 cd /opt/chatbot/server-src
+cp .env.example .env && $EDITOR .env   # 至少填 ACCESS_TOKEN（见「安全」）
 bash install.sh
 ```
 
-升级：
+升级 / 部署（唯一推荐路径）：
 
 ```bash
 cd /opt/chatbot
 bash server-src/upgrade.sh
 ```
 
-`upgrade.sh` 会自动切到 `server-src`，默认从当前源码构建 backend/frontend，启动容器，并检查：
+部署模型是**源码进镜像**：所有改动先提交进 git，`upgrade.sh` 走
+`git pull --ff-only → docker compose build → docker compose up -d → 健康检查`。
+不要再用 `docker cp` 往运行中的容器塞代码——那是已废弃的旧流程，`compose up` 会冲掉它。
+改 `.env` 后同样必须 `compose up`：`docker restart` **不会**重新加载 `env_file`
+（环境变量在创建容器时注入）。三端（本地 / GitHub / 服务器）应始终停在同一个 commit：
+服务器是一个干净的 git 检出，本地改 → push → 服务器 `upgrade.sh`。
 
-- `GET /health`
-- `GET /api/dashboard/today`
-
-常用参数：
+`upgrade.sh` 默认从当前源码构建 backend/frontend，启动容器，并检查
+`GET /health` 与 `GET /api/dashboard/today`。常用参数：
 
 - `--skip-pull`：不拉 git。
 - `--skip-build`：不重建镜像，只重启。
 - `--pull-images`：优先拉 ghcr 预构建镜像。
 - `--no-healthcheck`：跳过部署后健康检查。
+
+## 安全 / 访问控制
+
+- **访问令牌**：所有 `/api/*` 由 `.env` 的 `ACCESS_TOKEN` 保护（中间件见
+  `backend/app/main.py`）。**留空 = 完全不鉴权，禁止用于公网。** 用
+  `openssl rand -hex 24` 生成；网页首次访问输入一次存浏览器，Siri 快捷指令用
+  `?token=<值>`。少数公开端点（VAPID 公钥、推送回执）在 `PUBLIC_API_PATHS` 白名单内。
+- **HTTPS 在源站强制**：`nginx.conf` 用 `X-Forwarded-Proto` 判断并 308 跳转，再发
+  `Strict-Transport-Security`（HSTS）等安全头。与 CDN 厂商无关——换任何会转发该头的
+  CDN/反代都生效；可信代理会覆盖该头，客户端无法伪造。前提铁律：**源站不暴露公网，
+  只接受来自隧道 / 可信 CDN 回源的连接**，否则该头可被绕过伪造。
+- **生产关闭调试**：`DEBUG=false`，`/api/debug/*` 不挂载。
+- **密钥只进 `.env`**：`.env` 已被 `.gitignore` 排除，不进 git，仓库内只有
+  `.env.example` 模板。LLM key、`DINGTALK_AES_KEY`、`VAPID_PRIVATE_KEY`、`ZJUT_KEY`
+  都从环境读取，源码中无硬编码密钥。
 
 ## 设置
 
