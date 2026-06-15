@@ -95,14 +95,27 @@ if [[ ! -f .env ]]; then
     warn "未找到 openssl/python3，未能自动生成 ACCESS_TOKEN。请手动在 .env 设置，否则接口无鉴权！"
   fi
 
-  # Standby agent provider
-  read -rp "  LLM Provider (openai/anthropic/custom) [openai]: " PROVIDER
-  PROVIDER="${PROVIDER:-openai}"
+  # Background (standby) agent provider. All providers are first-class — any
+  # OpenAI-compatible service works. We *recommend* DeepSeek because the codebase
+  # has DeepSeek-specific optimizations (thinking mode, cache-aware billing,
+  # retry), but it is not forced; pick whatever you have a key for.
+  echo ""
+  echo "  后台 Agent 用哪个 Provider？（都平等支持，任何 OpenAI 兼容服务均可）"
+  echo "    推荐 deepseek —— 已做专属优化（思考模式 / 缓存计费 / 自动重试），但不强制。"
+  read -rp "  Provider (deepseek/openai/anthropic/custom) [deepseek]: " PROVIDER
+  PROVIDER="${PROVIDER:-deepseek}"
   sed -i "s|^STANDBY_AGENT_PROVIDER=.*|STANDBY_AGENT_PROVIDER=${PROVIDER}|" .env
 
-  read -rp "  LLM Model [gpt-4o-mini]: " MODEL
-  MODEL="${MODEL:-gpt-4o-mini}"
-  sed -i "s|^STANDBY_AGENT_MODEL=.*|STANDBY_AGENT_MODEL=${MODEL}|" .env
+  # Sensible default model per provider (still fully overridable).
+  case "$PROVIDER" in
+    deepseek)  DEFMODEL="deepseek-v4-flash" ;;
+    openai)    DEFMODEL="gpt-4o-mini" ;;
+    anthropic) DEFMODEL="claude-haiku-4-5-20251001" ;;
+    *)         DEFMODEL="" ;;
+  esac
+  read -rp "  Model [${DEFMODEL:-请填写}]: " MODEL
+  MODEL="${MODEL:-$DEFMODEL}"
+  [[ -n "$MODEL" ]] && sed -i "s|^STANDBY_AGENT_MODEL=.*|STANDBY_AGENT_MODEL=${MODEL}|" .env
 
   echo ""
   read -rp "  是否配置 Web Push 通知 (需要 HTTPS)? [y/N]: " SETUP_PUSH

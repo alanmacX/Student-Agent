@@ -153,7 +153,78 @@ bash server-src/upgrade.sh
   `.env.example` 模板。LLM key、`DINGTALK_AES_KEY`、`VAPID_PRIVATE_KEY`、`ZJUT_KEY`
   都从环境读取，源码中无硬编码密钥。
 
+## 公网 HTTPS（复制即用）
+
+`install.sh` 装出来是 `http://IP:80`。公网使用**必须**在前面加一层 HTTPS。任选其一，
+都让源站只听本地 80、不直接暴露公网：
+
+**方案 A — Cloudflare Tunnel**（源站零暴露，无需开放入站端口、无需自己管证书）：
+
+```bash
+# 在服务器上
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+chmod +x /usr/local/bin/cloudflared
+cloudflared tunnel login                      # 浏览器授权你的域名
+cloudflared tunnel create student-agent
+# /etc/cloudflared/config.yml:
+#   tunnel: <上一步的 tunnel id>
+#   credentials-file: /root/.cloudflared/<id>.json
+#   ingress:
+#     - hostname: your.domain.com
+#       service: http://localhost:80
+#     - service: http_status:404
+cloudflared tunnel route dns student-agent your.domain.com
+cloudflared service install && systemctl restart cloudflared
+```
+
+Cloudflare 边缘自动签发/续期证书，并发 `X-Forwarded-Proto` —— 源站的 `nginx.conf`
+会据此强制 HTTPS。**别把域名 DNS 直接 A 记录指向服务器 IP**，只用隧道的 CNAME。
+
+**方案 B — Caddy 自动 HTTPS**（自己的机器直连公网、80/443 可入站时）：
+
+```caddyfile
+# /etc/caddy/Caddyfile
+your.domain.com {
+    reverse_proxy localhost:80      # 转发到本项目的 nginx
+}
+```
+
+```bash
+# 把 docker-compose 的 nginx 端口从 80:80 改成 127.0.0.1:80:80（只听本地），
+# 让 Caddy 独占公网 80/443，然后：
+systemctl reload caddy
+```
+
+Caddy 自动申请并续期 Let's Encrypt 证书，并默认转发 `X-Forwarded-Proto`。
+
+## 迁移到新服务器（无痛）
+
+数据全在一个 SQLite 库里，迁移 = 导出 db + `.env` → 新机导入。`.env` 一并带走，
+**访问令牌和推送密钥不变**，旧网页 / 手机 / Siri 快捷指令无需重新登录。
+
+```bash
+# ① 旧服务器：一键导出（db + .env 打成一个包）
+cd /opt/chatbot && bash server-src/scripts/backup.sh
+#   → student-agent-backup-<时间>.tgz
+
+# ② 传到新服务器
+scp student-agent-backup-*.tgz newserver:/tmp/
+
+# ③ 新服务器：照常安装，再导入
+git clone https://github.com/alanmacX/Student-Agent.git /opt/chatbot
+cd /opt/chatbot/server-src && bash install.sh
+bash server-src/scripts/restore.sh /tmp/student-agent-backup-*.tgz
+```
+
+`restore.sh` 会停 backend、把旧库写进数据卷、用旧 `.env` 覆盖（新装生成的 `.env`
+留作 `.env.fresh.*`），再 `--force-recreate` 重启让令牌生效。钉钉登录是设备态、不随
+库迁移，新机在 Settings → 钉钉 重新扫码即可；学习通同理。
+
 ## 设置
+
+所有 provider 平等支持（任何 OpenAI 兼容接口）。**推荐 DeepSeek**——代码里有
+DeepSeek 专属优化（思考模式、缓存计费、自动重试），性价比好；但**不强制**，用你手上
+有 key 的任意 provider 都行。DeepSeek 已作为内置 provider 预置，填 key 即用。
 
 进入 Settings 后至少确认：
 

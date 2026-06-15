@@ -23,8 +23,10 @@ class Settings(BaseSettings):
 
     debug: bool = False
     standby_interval_minutes: int = 15
-    standby_agent_provider: str = "openai"
-    standby_agent_model: str = "gpt-4o-mini"
+    # Providers are equal; DeepSeek is the recommended (optimized) default but any
+    # OpenAI-compatible provider works. Always overridden by .env in practice.
+    standby_agent_provider: str = "deepseek"
+    standby_agent_model: str = "deepseek-v4-flash"
 
     class Config:
         env_file = ".env"
