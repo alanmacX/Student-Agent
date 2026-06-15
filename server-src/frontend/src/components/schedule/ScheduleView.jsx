@@ -247,7 +247,9 @@ export default function ScheduleView() {
           updated[lastIdx] = { ...updated[lastIdx], reasoning: (updated[lastIdx].reasoning || "") + chunk };
           return updated;
         }
-        return prev;
+        // Models often stream reasoning before any text — open the streaming
+        // assistant bubble now so leading reasoning isn't dropped on the floor.
+        return [...prev, { role: "assistant", content: "", reasoning: chunk, _streaming: true }];
       });
     },
     onToolStart: (tools) => {
@@ -354,8 +356,12 @@ export default function ScheduleView() {
     }
   }, [activeSession, deleteSession]);
 
-  const handleSend = useCallback(async () => {
-    if (!input.trim() || isStreaming) return;
+  // Core send path, decoupled from the input box so slash commands can drive it
+  // directly without round-tripping through `input` + setTimeout (which captured
+  // a stale closure and silently dropped the message).
+  const sendText = useCallback(async (text) => {
+    const msgToSend = (text || "").trim();
+    if (!msgToSend || isStreaming) return;
 
     const now = Date.now();
     const idle = now - lastActivityRef.current;
@@ -381,13 +387,17 @@ export default function ScheduleView() {
 
     lastActivityRef.current = now;
 
-    const userMsg = { role: "user", content: input.trim() };
-    setMessages((prev) => [...prev, userMsg]);
-    const msgToSend = input.trim();
-    setInput("");
+    setMessages((prev) => [...prev, { role: "user", content: msgToSend }]);
     setAgentStatus("处理中...");
     startStream("/api/schedule/chat", { message: msgToSend, session_id: sessionId });
-  }, [input, isStreaming, activeSession, startStream, createSession]);
+  }, [isStreaming, activeSession, startStream, createSession]);
+
+  const handleSend = useCallback(async () => {
+    if (!input.trim() || isStreaming) return;
+    const text = input.trim();
+    setInput("");
+    await sendText(text);
+  }, [input, isStreaming, sendText]);
 
   const handleCommand = useCallback(async (cmdName, args) => {
     if (cmdName === "/remind") {
@@ -414,18 +424,23 @@ export default function ScheduleView() {
       } catch {
         setMessages((prev) => [...prev, { role: "system", content: "保存失败" }]);
       }
-    } else if (cmdName === "/status") {
-      // Send as normal agent message
-      setInput("检查服务器状态");
-      setTimeout(() => handleSend(), 50);
     } else if (cmdName === "/clear") {
       setMessages([]);
       createSession("新对话").then((s) => { if (s) setActiveSession(s); });
     } else {
-      // Unknown command — send as normal message
-      setInput(cmdName + (args ? " " + args : ""));
+      // Everything else (/status, /scan, /memory, /push, or any unrecognized
+      // slash command) is routed to the agent as a plain message. Map the known
+      // shortcuts to natural-language prompts; fall back to the raw text.
+      const PROMPTS = {
+        "/status": "检查服务器状态",
+        "/scan": "扫描学习通最新消息和作业",
+        "/memory": "查看我的 Memory 里有哪些重要条目",
+        "/push": "检查推送通知的设置和状态",
+      };
+      const text = PROMPTS[cmdName] || (cmdName + (args ? " " + args : "")).replace(/^\//, "");
+      await sendText(text);
     }
-  }, [handleSend, createSession, setActiveSession]);
+  }, [createSession, setActiveSession, sendText]);
 
   const handleConfirm = useCallback(async () => {
     if (isStreaming) return;
