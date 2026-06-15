@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -208,6 +209,77 @@ PERIOD_END = {
 }
 
 
+def _parse_weeks_str(s: str) -> list[int]:
+    """Parse a human week spec: "1-8", "1-8,10-16", "1,3,5", with optional
+    单/双 (odd/even) markers, e.g. "1-16单" / "2-16/双" / "1-16(单)"."""
+    parity = "odd" if "单" in s else ("even" if "双" in s else None)
+    out: set[int] = set()
+    # Keep only digits, ranges and separators; turn everything else into commas.
+    cleaned = re.sub(r"[^0-9,\-]", ",", s)
+    for seg in cleaned.split(","):
+        seg = seg.strip().strip("-")
+        if not seg:
+            continue
+        if "-" in seg:
+            try:
+                a, b = (int(x) for x in seg.split("-", 1))
+            except ValueError:
+                continue
+            out.update(range(min(a, b), max(a, b) + 1))
+        else:
+            try:
+                out.add(int(seg))
+            except ValueError:
+                continue
+    weeks = sorted(w for w in out if w > 0)
+    if parity == "odd":
+        weeks = [w for w in weeks if w % 2 == 1]
+    elif parity == "even":
+        weeks = [w for w in weeks if w % 2 == 0]
+    return weeks
+
+
+def expand_weeks(weeks) -> list[int]:
+    """Normalize the many ways a timetable can express which weeks a class runs.
+
+    Backward compatible with the original [start, end] range format:
+      - None / [] / missing      -> weeks 1..16 (default)
+      - [a, b] (exactly 2 ints)  -> inclusive range a..b   (LEGACY — unchanged)
+      - [w1, w2, w3, ...]        -> those explicit weeks (length != 2)
+      - "1-8,10-16" / "1-16单"   -> string spec with ranges + 单/双 parity
+      - 7                        -> single week
+    """
+    if not weeks:
+        return list(range(1, 17))
+    if isinstance(weeks, str):
+        return _parse_weeks_str(weeks) or list(range(1, 17))
+    if isinstance(weeks, (list, tuple)):
+        try:
+            ints = [int(w) for w in weeks]
+        except (TypeError, ValueError):
+            return list(range(1, 17))
+        if len(ints) == 2:  # legacy range form — keep exactly as before
+            return list(range(min(ints), max(ints) + 1))
+        return sorted({w for w in ints if w > 0}) or list(range(1, 17))
+    try:
+        return [int(weeks)]
+    except (TypeError, ValueError):
+        return list(range(1, 17))
+
+
+def _parse_hhmm(value) -> tuple[int, int] | None:
+    """Parse an optional explicit "HH:MM" time override; None if absent/invalid."""
+    if not value or not isinstance(value, str):
+        return None
+    m = re.match(r"^\s*(\d{1,2})[:：](\d{2})\s*$", value)
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if 0 <= h < 24 and 0 <= mi < 60:
+        return (h, mi)
+    return None
+
+
 async def import_timetable(db_path: str, semester_start_str: str, courses: list[dict]) -> dict:
     """Expand a weekly-repeating timetable into dated rows in server_courses.
 
@@ -232,13 +304,18 @@ async def import_timetable(db_path: str, semester_start_str: str, courses: list[
         end_period = max(periods)
         location = course.get("location") or None
         teacher = course.get("teacher") or None
-        weeks = course.get("weeks") or [1, 16]
-        week_start = int(weeks[0]) if weeks else 1
-        week_end = int(weeks[1]) if len(weeks) > 1 else 16
+        week_list = expand_weeks(course.get("weeks"))
         notes = f"教师：{teacher}" if teacher else None
         sh, sm = PERIOD_START.get(start_period, (8, 0))
         eh, em = PERIOD_END.get(end_period, (9, 40))
-        for week in range(week_start, week_end + 1):
+        # Optional explicit "HH:MM" overrides for schools with different bells.
+        start_override = _parse_hhmm(course.get("start"))
+        end_override = _parse_hhmm(course.get("end"))
+        if start_override:
+            sh, sm = start_override
+        if end_override:
+            eh, em = end_override
+        for week in week_list:
             days_offset = (week - 1) * 7 + (day - 1)
             course_date = semester_start + timedelta(days=days_offset)
             start_dt = course_date.replace(hour=sh, minute=sm, second=0, microsecond=0)

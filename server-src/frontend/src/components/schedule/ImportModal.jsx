@@ -4,9 +4,20 @@ import { importCourses } from "../../api/schedule";
 
 const EXAMPLE = [
   { name: "高等数学", day: 1, periods: [1, 2], location: "A101", teacher: "张老师", weeks: [1, 16] },
-  { name: "大学英语", day: 2, periods: [3, 4], location: "B202", teacher: "李老师", weeks: [1, 16] },
-  { name: "线性代数", day: 3, periods: [5, 6], location: "C303", weeks: [1, 8] },
+  { name: "大学英语", day: 2, periods: [3, 4], location: "B202", teacher: "李老师", weeks: "1-8,10-16" },
+  { name: "线性代数", day: 3, periods: [5, 6], location: "C303", teacher: "王老师", weeks: "1-16单" },
 ];
+
+// Render any of the accepted `weeks` forms (range array / explicit list / string)
+// into a readable label for the preview.
+function weeksLabel(weeks) {
+  if (weeks == null) return "第1-16周";
+  if (typeof weeks === "string") return `第${weeks}周`;
+  if (Array.isArray(weeks)) {
+    return weeks.length === 2 ? `第${weeks[0]}-${weeks[1]}周` : `第${weeks.join(",")}周`;
+  }
+  return `第${weeks}周`;
+}
 
 const PERIOD_LABEL = {
   1: "08:00", 2: "08:55", 3: "10:00", 4: "10:55",
@@ -110,7 +121,12 @@ export default function ImportModal({ onClose, onImported }) {
             <p className="font-semibold text-[var(--text-secondary)] mb-1">字段说明</p>
             <p><code className="text-[var(--accent-soft)]">day</code>：1=周一 … 7=周日</p>
             <p><code className="text-[var(--accent-soft)]">periods</code>：[起始节, 结束节]，节次→时间见下</p>
-            <p><code className="text-[var(--accent-soft)]">weeks</code>：[起始周, 结束周]，默认 [1, 16]</p>
+            <p><code className="text-[var(--accent-soft)]">weeks</code>：周次，默认全学期。支持几种写法：</p>
+            <p className="pl-3">· <code className="text-[var(--accent-soft)]">[1, 16]</code> 连续 1–16 周</p>
+            <p className="pl-3">· <code className="text-[var(--accent-soft)]">"1-8,10-16"</code> 跳过第 9 周</p>
+            <p className="pl-3">· <code className="text-[var(--accent-soft)]">"1-16单"</code> / <code className="text-[var(--accent-soft)]">"2-16双"</code> 单/双周</p>
+            <p className="pl-3">· <code className="text-[var(--accent-soft)]">[1,3,5,7]</code> 指定具体周次</p>
+            <p><code className="text-[var(--accent-soft)]">start</code>/<code className="text-[var(--accent-soft)]">end</code>（可选）：本校作息不同时填 "08:00"/"09:40" 覆盖</p>
             <p className="mt-1 font-semibold text-[var(--text-secondary)]">节次时间</p>
             {[1,3,5,7,9].map(p => (
               <p key={p}>{p}-{p+1}节：{PERIOD_LABEL[p]} – {PERIOD_END_LABEL[p+1]}</p>
@@ -130,7 +146,7 @@ export default function ImportModal({ onClose, onImported }) {
                     <span className="font-medium text-[var(--text-primary)]">{c.name}</span>
                     {c.location && <span className="text-[var(--text-tertiary)]">{c.location}</span>}
                     <span className="ml-auto text-[var(--text-tertiary)]">
-                      第{(c.weeks||[1,16])[0]}-{(c.weeks||[1,16])[1]}周
+                      {weeksLabel(c.weeks)}
                     </span>
                   </div>
                 ))}
