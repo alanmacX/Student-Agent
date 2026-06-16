@@ -91,7 +91,23 @@ export default function HubView() {
 
   const timeline = useMemo(() => buildTimeline(dashboard), [dashboard]);
   const actions = useMemo(() => buildActions(dashboard), [dashboard]);
-  const nextItem = timeline.find((item) => !item.overdue) || timeline[0];
+  // "下一件事" = the next thing that hasn't passed yet. A class in session still
+  // counts (compare against end_at); a finished one is skipped. Fall back to an
+  // overdue item if nothing is upcoming, but never to an already-ended event.
+  const nextItem = useMemo(() => {
+    const nowMs = Date.now();
+    const notPast = (item) => {
+      const raw = item.end_at || item.start_at || item.due_at || item.sort_at;
+      if (!raw) return true;
+      const t = new Date(raw).getTime();
+      return Number.isNaN(t) || t >= nowMs;
+    };
+    return (
+      timeline.find((item) => !item.overdue && notPast(item)) ||
+      timeline.find((item) => item.overdue) ||
+      null
+    );
+  }, [timeline]);
 
   return (
     <div className="relative flex h-full flex-col bg-[var(--panel-bg)]">
