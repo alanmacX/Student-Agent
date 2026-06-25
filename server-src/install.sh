@@ -184,8 +184,15 @@ if [[ "${SETUP_DT,,}" == "y" ]]; then
   # ── 1. 依赖 ──────────────────────────────────────────────────────────────
   info "安装系统依赖 (Xvfb, ImageMagick, xdotool)..."
   if command -v apt-get &>/dev/null; then
-    apt-get install -y -q xvfb x11-utils x11-apps imagemagick xdotool \
-      libgtk-3-0 libnss3 libxss1 libasound2 libgbm1 2>/dev/null | tail -1
+    apt-get install -y -q xvfb x11-utils x11-apps imagemagick xdotool fluxbox \
+      libgtk-3-0 libnss3 libxss1 libgbm1 libpulse-mainloop-glib0 \
+      libxcb-xinerama0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+      libxcb-keysyms1 libxcb-render-util0 libxkbcommon-x11-0 \
+      2>/dev/null | tail -1
+    # libasound2 was renamed to libasound2t64 in Ubuntu 24.04+
+    apt-get install -y -q libasound2t64 2>/dev/null \
+      || apt-get install -y -q libasound2 2>/dev/null \
+      || true
   elif command -v yum &>/dev/null; then
     yum install -y -q xorg-x11-server-Xvfb ImageMagick xdotool \
       xorg-x11-apps gtk3 nss alsa-lib 2>/dev/null | tail -1
@@ -204,6 +211,16 @@ if [[ "${SETUP_DT,,}" == "y" ]]; then
     ok "Xvfb 已在运行"
   fi
 
+  # fluxbox is required so xdotool clicks are dispatched to windows correctly
+  if ! pgrep -x fluxbox &>/dev/null; then
+    info "启动窗口管理器 fluxbox..."
+    DISPLAY=:99 fluxbox &>/dev/null &
+    sleep 1
+    ok "fluxbox 已启动"
+  else
+    ok "fluxbox 已在运行"
+  fi
+
   # ── 3. 安装钉钉 Linux 客户端 ──────────────────────────────────────────────
   # Use 'find -type f' to avoid matching directories like 'doc/'
   DT_BIN=$(find /opt/apps/com.alibabainc.dingtalk/files -name com.alibabainc.dingtalk -type f 2>/dev/null | sort -V | tail -1)
@@ -214,14 +231,11 @@ if [[ "${SETUP_DT,,}" == "y" ]]; then
     # Try cached .deb first
     if [[ ! -f "$DT_DEB" ]]; then
       DT_GITHUB="https://github.com/alanmacX/Student-Agent/releases/latest/download/dingtalk-linux-amd64.deb"
-      DT_OFFICIAL="https://dtapp-pub.dingtalk.com/dingtalk-desktop/xc_dingtalk_update/linux_deb/Release/com.alibabainc.dingtalk_7.6.55-Release.2410312_amd64.deb"
-      info "下载钉钉 Linux 客户端 (v7.6.55)..."
+      info "下载钉钉 Linux 客户端..."
       if command -v wget &>/dev/null; then
-        wget -q --show-progress -O "$DT_DEB" "$DT_GITHUB" 2>/dev/null || \
-          { warn "GitHub 链接失败，尝试官方备用链接..."; wget -q --show-progress -O "$DT_DEB" "$DT_OFFICIAL"; }
+        wget -q --show-progress -O "$DT_DEB" "$DT_GITHUB"
       else
-        curl -fL -o "$DT_DEB" "$DT_GITHUB" 2>/dev/null || \
-          { warn "GitHub 链接失败，尝试官方备用链接..."; curl -fL -o "$DT_DEB" "$DT_OFFICIAL"; }
+        curl -fL -o "$DT_DEB" "$DT_GITHUB"
       fi
       [[ -s "$DT_DEB" ]] || { warn "下载失败，请手动安装钉钉"; rm -f "$DT_DEB"; }
     else
@@ -246,35 +260,19 @@ if [[ "${SETUP_DT,,}" == "y" ]]; then
     ok "钉钉已安装: $DT_BIN"
   fi
 
-  # ── 3b. 修复库冲突 ────────────────────────────────────────────────────────
-  # DingTalk bundles system libs (libm.so.6, libcrypto.so.1.1) that conflict with
-  # the host. Its RUNPATH is set to './' which forces loading from the install dir.
-  # Fix: remove conflicting system libs, create separate dir for DingTalk-specific libs.
-  if [[ -n "$DT_BIN" ]]; then
-    DT_DIR="$(dirname "$DT_BIN")"
-
-    # Remove bundled system libs that conflict with host
-    for lib in libm.so.6 libc.so.6 libpthread.so.0 libdl.so.2 librt.so.1 libresolv.so.2; do
-      rm -f "$DT_DIR/$lib" 2>/dev/null
-    done
-
-    # Create separate lib directory with DingTalk-specific libraries only
-    DT_LIBS="/opt/dingtalk-libs"
-    mkdir -p "$DT_LIBS"
-    # Link libs from subdirectories (plugins, audio, etc.) — not the main dir
-    find "$DT_DIR" -mindepth 2 -name '*.so' -exec ln -sf {} "$DT_LIBS/" \; 2>/dev/null
-    # Link DingTalk-specific libs from main dir (libdtfbase, libcef, etc.)
-    for lib in libdtfbase.so libcef.so libapp.so libdingtalk_*.so; do
-      [[ -f "$DT_DIR/$lib" ]] && ln -sf "$DT_DIR/$lib" "$DT_LIBS/" 2>/dev/null
-    done
-    ok "库冲突已修复"
-  fi
+  # ── 3b. 库说明 ────────────────────────────────────────────────────────────
+  # DingTalk 8.x bundles its own Qt/CEF libs across subdirectories. The launch
+  # wrapper (start-dingtalk.sh) builds LD_LIBRARY_PATH from all .so directories
+  # at runtime, so no manual symlink/removal is needed here.
+  ok "钉钉已就绪（start-dingtalk.sh 自动处理库路径）"
 
   # ── 4. 启动钉钉 ───────────────────────────────────────────────────────────
   if [[ -n "$DT_BIN" ]] && ! pgrep -f com.alibabainc.dingtalk &>/dev/null; then
     info "启动钉钉..."
     DT_DIR="$(dirname "$DT_BIN")"
-    DISPLAY=:99 LD_LIBRARY_PATH="/opt/dingtalk-libs" "$DT_BIN" --no-sandbox &>/dev/null &
+    DT_DIR="$(dirname "$DT_BIN")"
+    LIB_PATHS="$(find "$DT_DIR" -name '*.so' -printf '%h\n' | sort -u | tr '\n' ':')"
+    DISPLAY=:99 LD_LIBRARY_PATH="${LIB_PATHS}${DT_DIR}" "$DT_BIN" --no-sandbox --disable-gpu &>/dev/null &
     sleep 3
     ok "钉钉已启动"
   elif pgrep -f com.alibabainc.dingtalk &>/dev/null; then

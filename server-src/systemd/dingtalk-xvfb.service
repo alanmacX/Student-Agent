@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x800x24 -ac +extension GLX +render -noreset
+ExecStartPost=/bin/bash -c 'sleep 1 && DISPLAY=:99 /usr/bin/fluxbox &'
 Restart=always
 RestartSec=3
 

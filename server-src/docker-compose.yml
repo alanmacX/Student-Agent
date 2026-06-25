@@ -19,7 +19,7 @@ services:
       - chatbot_data:/data
       # Mount the *entire* DingTalk config dir so we can glob for the account-
       # scoped *_v3 subdirectory without hardcoding the user ID.
-      - /root/.config/DingTalk:/dingtalk_cfg:ro
+      - ${DINGTALK_HOST_CFG:-/root/.config/DingTalk}:/dingtalk_cfg:ro
     expose:
       - "8000"
     healthcheck:

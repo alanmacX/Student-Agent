@@ -6,7 +6,8 @@ Requires=dingtalk-xvfb.service
 [Service]
 Type=simple
 ExecStartPre=/bin/sleep 2
-Environment=HOME=/root DISPLAY=:99
+User=ubuntu
+Environment=HOME=/home/ubuntu DISPLAY=:99
 ExecStart=/opt/chatbot/server-src/start-dingtalk.sh
 Restart=on-failure
 RestartSec=10

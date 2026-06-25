@@ -6,6 +6,7 @@ Requires=dingtalk-xvfb.service
 [Service]
 Type=simple
 Environment=DISPLAY=:99
+Environment=DINGTALK_CFG_DIR=/home/ubuntu/.config/DingTalk
 WorkingDirectory=/opt/chatbot/server-src
 # Lock port 7777 to the Docker bridge + localhost before the helper comes up.
 ExecStartPre=/bin/bash /opt/chatbot/server-src/scripts/qr-firewall.sh

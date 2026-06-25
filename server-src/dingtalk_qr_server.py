@@ -192,20 +192,24 @@ def _click_qr_refresh() -> dict:
 
     if geom:
         x = geom["X"] + geom["WIDTH"] // 2
-        # The "点击刷新" (refresh) button sits below the QR image, at ~0.56 of the
-        # window height. 0.45 lands on the QR/X-icon center and misses the button.
-        y = geom["Y"] + int(geom["HEIGHT"] * 0.56)
+        # QR center sits at ~0.45 of window height; the refresh icon overlays it.
+        y = geom["Y"] + int(geom["HEIGHT"] * 0.45)
         method = "qr_refresh_center"
-        try:
-            subprocess.run(
-                ["xdotool", "windowactivate", "--sync", win_id],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env={**os.environ, "DISPLAY": DISPLAY},
-                timeout=3,
-            )
-        except Exception:
-            pass
+        for focus_cmd in (
+            ["xdotool", "windowfocus", "--sync", win_id],
+            ["xdotool", "windowactivate", "--sync", win_id],
+        ):
+            try:
+                subprocess.run(
+                    focus_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env={**os.environ, "DISPLAY": DISPLAY},
+                    timeout=3,
+                )
+                break
+            except Exception:
+                pass
     else:
         x = display_w // 2
         y = display_h // 2
@@ -230,12 +234,13 @@ def _click_qr_refresh() -> dict:
 #   AES-ECB-decrypt(K, encrypted_page1[:16]) == b"SQLite format 3\x00".
 # The result is cached on disk so we only rescan when the key actually breaks.
 SQLITE_MAGIC = b"SQLite format 3\x00"
-KEY_CACHE_FILE = os.getenv("DINGTALK_KEY_CACHE", "/root/.config/DingTalk/.aes_key")
+_DINGTALK_CFG = os.getenv("DINGTALK_CFG_DIR", os.path.expanduser("~/.config/DingTalk"))
+KEY_CACHE_FILE = os.getenv("DINGTALK_KEY_CACHE", f"{_DINGTALK_CFG}/.aes_key")
 _key_cache: Dict[str, Optional[str]] = {"hex": None}
 
 
 def _dingtalk_db_path() -> Optional[str]:
-    c = sorted(glob.glob("/root/.config/DingTalk/*_v3/DBFiles/dingtalk.db"))
+    c = sorted(glob.glob(f"{_DINGTALK_CFG}/*_v3/DBFiles/dingtalk.db"))
     return c[0] if c else None
 
 
@@ -374,8 +379,60 @@ def _scan_pid_for_key(pid: int, ct: bytes) -> Optional[bytes]:
     return None
 
 
+def _derive_key_from_config(ct: bytes) -> Optional[bytes]:
+    """DingTalk 8.x derives the DB encryption key via PBKDF2:
+      password = str(uid) + salt_hex   (uid = numeric user ID, salt from user_config)
+      salt     = b"666DingT"           (first 8 bytes of hardcoded "666DingTalk888")
+      iter     = 1000,  dklen = 32
+    Then md5hex(pbkdf2_output)[:16].encode() is the AES-128-ECB key.
+
+    The account directory is named md5(uid)[16:] + uid[:4], so we recover
+    the full uid by brute-forcing the remaining digits (< 10M attempts)."""
+    import hashlib, json, base64
+    acct_dirs = sorted(glob.glob(f"{_DINGTALK_CFG}/*_v3"))
+    for acct_dir in acct_dirs:
+        uc_path = os.path.join(acct_dir, "user_config")
+        try:
+            raw = open(uc_path, "rb").read()
+            cfg = json.loads(base64.b64decode(raw))
+            salt_hex = cfg.get("salt", "")
+            if not salt_hex:
+                continue
+        except Exception:
+            continue
+        dir_name = os.path.basename(acct_dir).split("_v3")[0]
+        uid_prefix = dir_name[-4:]  # last 4 chars of dir = first 4 digits of uid
+        md5_suffix = dir_name[:-4]  # rest = md5(uid)[16:]
+        uid = _recover_uid(uid_prefix, md5_suffix)
+        if not uid:
+            log.warning("could not recover uid from dir %s", dir_name)
+            continue
+        password = (uid + salt_hex).encode()
+        dk = hashlib.pbkdf2_hmac("sha1", password, b"666DingT", 1000, dklen=32)
+        candidate = hashlib.md5(dk).hexdigest()[:16].encode()
+        if _validates(candidate, ct):
+            log.info("derived AES key from config (uid=%s)", uid)
+            return candidate
+    return None
+
+
+def _recover_uid(prefix: str, md5_tail: str) -> Optional[str]:
+    """Brute-force the numeric uid given its first 4 digits and md5(uid)[16:]."""
+    import hashlib
+    for length in range(6, 13):
+        suffix_len = length - len(prefix)
+        if suffix_len < 0:
+            continue
+        for i in range(10 ** suffix_len):
+            uid = f"{prefix}{i:0{suffix_len}d}"
+            if hashlib.md5(uid.encode()).hexdigest()[16:] == md5_tail:
+                return uid
+    return None
+
+
 def discover_aes_key(force: bool = False) -> dict:
-    """Resolve the current DingTalk AES key, scanning live memory if needed."""
+    """Resolve the current DingTalk AES key, trying config-based derivation
+    first, then falling back to live memory scan."""
     db = _dingtalk_db_path()
     if not db:
         return {"ok": False, "error": "no DingTalk DB found"}
@@ -393,10 +450,12 @@ def discover_aes_key(force: bool = False) -> dict:
     if not force and _key_cache["hex"] and _validates(bytes.fromhex(_key_cache["hex"]), ct):
         return {"ok": True, "key_hex": _key_cache["hex"], "method": "cache"}
 
-    # Scan the process(es) holding the DB open first (most likely to hold the
-    # key), then every DingTalk process. The key lives in the main process heap,
-    # but DingTalk may not have the DB file open at scan time, so we must not
-    # require that.
+    # Try PBKDF2 derivation from config files (fast, no memory scan needed)
+    derived = _derive_key_from_config(ct)
+    if derived:
+        return _persist_key(derived, 0, "pbkdf2-config")
+
+    # Fall back to scanning live process memory (slow, may OOM on small hosts)
     holders = _pids_with_db_open(db)
     others = [p for p in _dingtalk_pids() if p not in holders]
     for pid in holders + others:
@@ -408,7 +467,7 @@ def discover_aes_key(force: bool = False) -> dict:
         if key:
             method = "db-holder" if pid in holders else "dingtalk-proc"
             return _persist_key(key, pid, method)
-    return {"ok": False, "error": "key not found in DingTalk process memory"}
+    return {"ok": False, "error": "key not found via config derivation or memory scan"}
 
 
 def _persist_key(key: bytes, pid: int, method: str) -> dict:
