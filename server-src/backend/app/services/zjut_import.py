@@ -6,10 +6,9 @@
 from __future__ import annotations
 
 import base64
-import json
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import aiosqlite
 from Crypto.Cipher import AES
@@ -17,6 +16,7 @@ from Crypto.Cipher import AES
 from app.config import settings
 
 LOCAL_TZ = timezone(timedelta(hours=8))
+TERM_XQM = {"1": "3", "2": "12", "3": "16"}
 
 # 节次 → (开始, 结束) 时分。可改;第5节是午休空档。对齐用户给的作息表(12 节)。
 PERIOD_TIMES: dict[int, tuple[str, str]] = {
@@ -100,16 +100,24 @@ def expand_courses(courses: list[dict], week1_monday: str) -> list[dict]:
         if s not in PERIOD_TIMES or e not in PERIOD_TIMES:
             continue
         start_hm, end_hm = PERIOD_TIMES[s][0], PERIOD_TIMES[e][1]
+        weekdays = c.get("weekdays") or [c.get("weekday")]
+        weekdays = [int(d) for d in weekdays if d]
         for wk in c["weeks"]:
-            day = base + timedelta(days=(wk - 1) * 7 + (c["weekday"] - 1))
-            rows.append({
-                "id": f"zjut_{uuid.uuid4().hex[:12]}",
-                "title": c["course"],
-                "location": c.get("classroom", ""),
-                "start_at": _dt(day, start_hm),
-                "end_at": _dt(day, end_hm),
-                "notes": "|".join(filter(None, [c.get("teacher", ""), f"第{wk}周", c.get("campus", "")])),
-            })
+            for weekday in weekdays:
+                day = base + timedelta(days=(wk - 1) * 7 + (weekday - 1))
+                rows.append({
+                    "id": f"zjut_{uuid.uuid4().hex[:12]}",
+                    "title": c["course"],
+                    "location": c.get("classroom", ""),
+                    "start_at": _dt(day, start_hm),
+                    "end_at": _dt(day, end_hm),
+                    "notes": "|".join(filter(None, [
+                        c.get("teacher", ""),
+                        f"第{wk}周",
+                        c.get("campus", ""),
+                        "实践环节" if c.get("kind") == "practice" else "",
+                    ])),
+                })
     return rows
 
 
@@ -146,55 +154,218 @@ def expand_exams(exams: list[dict]) -> list[dict]:
 
 # ── 写库(替换 zjut 来源的旧数据) ─────────────────────────────────────────────
 
-async def _write(db_path: str, course_rows: list[dict], exam_rows: list[dict]) -> None:
+def term_key(year: str, term: str) -> str:
+    return f"{year}:{term}"
+
+
+def course_calendar_name(year: str, term: str) -> str:
+    return f"正方教务:{year}:{term}"
+
+
+def exam_calendar_name(year: str, term: str) -> str:
+    return f"正方考试:{year}:{term}"
+
+
+def term_label(year: str, term: str) -> str:
+    return f"{year}-{int(year) + 1}学年第{term}学期"
+
+
+def _local_date(iso: str) -> date:
+    return datetime.fromisoformat(iso).astimezone(LOCAL_TZ).date()
+
+
+def _term_end_date(course_rows: list[dict], exam_rows: list[dict], fallback_end: str | None) -> str | None:
+    dates: list[date] = []
+    for row in course_rows + exam_rows:
+        end_at = row.get("end_at") or row.get("start_at")
+        if end_at:
+            dates.append(_local_date(end_at))
+    if fallback_end:
+        try:
+            dates.append(datetime.fromisoformat(fallback_end).date())
+        except ValueError:
+            pass
+    return max(dates).isoformat() if dates else None
+
+
+def _next_day(value: str) -> str:
+    return (datetime.fromisoformat(value).date() + timedelta(days=1)).isoformat()
+
+
+def _infer_week1(year: str, term: str, semester: dict, explicit: str = "") -> str:
+    if explicit:
+        return explicit
+    if semester and semester.get("year") == year and semester.get("term") == term:
+        return semester.get("week1_monday") or ""
+    # ZJUT short term follows the spring term. The calendar block gives spring
+    # term end as a Sunday; short term week 1 starts on the next day.
+    if semester and semester.get("year") == year and semester.get("term") == "2" and term == "3":
+        end = semester.get("end")
+        if end:
+            return _next_day(end)
+    return ""
+
+
+def _prefetch_targets(semester: dict) -> list[tuple[str, str]]:
+    if not semester or not semester.get("year") or not semester.get("term"):
+        return []
+    year, term = semester["year"], semester["term"]
+    targets = [(year, term)]
+    if term == "2":
+        targets.append((year, "3"))
+    return targets
+
+
+def _choose_active(terms: list[dict], now: datetime | None = None) -> dict | None:
+    if not terms:
+        return None
+    today = (now or datetime.now(timezone.utc)).astimezone(LOCAL_TZ).date().isoformat()
+    with_ranges = [t for t in terms if t.get("start_date")]
+    for term in with_ranges:
+        end = term.get("end_date") or term["start_date"]
+        if term["start_date"] <= today <= end:
+            return term
+    past = [t for t in with_ranges if t["start_date"] <= today]
+    if past:
+        return sorted(past, key=lambda t: t["start_date"])[-1]
+    return sorted(with_ranges, key=lambda t: t["start_date"])[0]
+
+
+async def _write_term(
+    db_path: str,
+    *,
+    year: str,
+    term: str,
+    week1_monday: str,
+    semester: dict,
+    course_rows: list[dict],
+    exam_rows: list[dict],
+) -> dict:
     now = datetime.now(timezone.utc).isoformat()
+    c_cal = course_calendar_name(year, term)
+    e_cal = exam_calendar_name(year, term)
+    label = term_label(year, term)
+    fallback_end = semester.get("end") if semester.get("year") == year and semester.get("term") == term else None
+    end_date = _term_end_date(course_rows, exam_rows, fallback_end)
     async with aiosqlite.connect(db_path) as db:
-        # 课表:清掉本地课程表里 zjut 来源的(calendar_name 标记),再写新
-        await db.execute("DELETE FROM server_courses WHERE calendar_name='正方教务'")
+        # 课表:只替换当前 term;顺手清掉旧版单一 calendar_name 的遗留数据。
+        await db.execute("DELETE FROM server_courses WHERE calendar_name IN (?, '正方教务')", (c_cal,))
         await db.executemany(
-            """INSERT INTO server_courses (id, title, calendar_name, start_at, end_at, location, notes, created_at, updated_at)
-               VALUES (?, ?, '正方教务', ?, ?, ?, ?, ?, ?)""",
-            [(r["id"], r["title"], r["start_at"], r["end_at"], r["location"], r["notes"], now, now)
+            """INSERT INTO server_courses
+                   (id, title, calendar_name, start_at, end_at, location, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(r["id"], r["title"], c_cal, r["start_at"], r["end_at"], r["location"], r["notes"], now, now)
              for r in course_rows],
         )
-        # 考试:写入 server_events,先清旧 zjut 考试(按 id 前缀无法 DELETE,用 calendar_name)
-        await db.execute("DELETE FROM server_events WHERE calendar_name='正方考试'")
+        # 考试:按 term 替换;顺手清掉旧版单一 calendar_name 的遗留数据。
+        await db.execute("DELETE FROM server_events WHERE calendar_name IN (?, '正方考试')", (e_cal,))
         await db.executemany(
-            """INSERT INTO server_events (id, title, calendar_name, start_at, end_at, location, notes, created_at, updated_at)
-               VALUES (?, ?, '正方考试', ?, ?, ?, ?, ?, ?)""",
-            [(r["id"], r["title"], r["start_at"], r["end_at"], r["location"], r["notes"], now, now)
+            """INSERT INTO server_events
+                   (id, title, calendar_name, start_at, end_at, location, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(r["id"], r["title"], e_cal, r["start_at"], r["end_at"], r["location"], r["notes"], now, now)
              for r in exam_rows],
         )
+        await db.execute(
+            """INSERT INTO zjut_terms
+                   (term_key, year, term, xqm, week1_monday, start_date, end_date,
+                    semester_label, calendar_name, courses_count, exams_count, last_import_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(term_key) DO UPDATE SET
+                   xqm=excluded.xqm,
+                   week1_monday=excluded.week1_monday,
+                   start_date=excluded.start_date,
+                   end_date=excluded.end_date,
+                   semester_label=excluded.semester_label,
+                   calendar_name=excluded.calendar_name,
+                   courses_count=excluded.courses_count,
+                   exams_count=excluded.exams_count,
+                   last_import_at=excluded.last_import_at""",
+            (term_key(year, term), year, term, TERM_XQM.get(term, term), week1_monday,
+             week1_monday, end_date, label, c_cal, len(course_rows), len(exam_rows), now),
+        )
         await db.commit()
+    return {
+        "term_key": term_key(year, term),
+        "year": year,
+        "term": term,
+        "week1_monday": week1_monday,
+        "start_date": week1_monday,
+        "end_date": end_date,
+        "semester_label": label,
+        "courses_fetched": len(course_rows),
+        "exams_written": len(exam_rows),
+        "calendar_name": c_cal,
+        "last_import_at": now,
+    }
 
 
 async def run_import(db_path: str, *, student_id: str, password: str,
                      year: str = "", term: str = "", week1_monday: str = "") -> dict:
-    """登录→自动检测学期→拉取→展开→写库。year/term/week1 留空则全自动检测。"""
+    """登录→自动检测学期→预抓可确定的 term→展开→写库。
+
+    year/term/week1 指定时只导入该 term;留空时导入当前 term,并在春学期
+    自动预抓紧随其后的短学期。
+    """
     from app.services import zjut
-    data = await zjut.fetch_timetable_and_exams(student_id, password, year, term)
-    sem = data.get("semester") or {}
-    wk1 = week1_monday or sem.get("week1_monday") or ""
-    if not wk1:
-        raise zjut.ZjutError("无法确定开学日(第1周周一)")
-    course_rows = expand_courses(data["courses"], wk1)
-    exam_rows = expand_exams(data["exams"])
-    await _write(db_path, course_rows, exam_rows)
-    # 记下检测到的学期信息 + 本次导入时间(供界面显示);不碰 password/save 字段
+
+    first = await zjut.fetch_timetable_and_exams(student_id, password, year, term)
+    sem = first.get("semester") or {}
+    targets = [(year, term)] if year and term else _prefetch_targets(sem)
+    if not targets:
+        raise zjut.ZjutError("拿不到当前学期信息,且未手动指定 year/term")
+
+    imported: list[dict] = []
+    skipped: list[dict] = []
+    first_key = term_key(year, term) if year and term else None
+    fetched_cache = {first_key: first} if first_key else {}
+
+    for target_year, target_term in targets:
+        wk1 = _infer_week1(target_year, target_term, sem, week1_monday if (target_year, target_term) == (year, term) else "")
+        if not wk1:
+            skipped.append({"year": target_year, "term": target_term, "reason": "无法确定第1周周一"})
+            continue
+        key = term_key(target_year, target_term)
+        data = fetched_cache.get(key)
+        if data is None:
+            data = await zjut.fetch_timetable_and_exams(student_id, password, target_year, target_term)
+        course_rows = expand_courses(data["courses"], wk1)
+        exam_rows = expand_exams(data["exams"])
+        if not course_rows and not exam_rows:
+            skipped.append({"year": target_year, "term": target_term, "reason": "正方返回空课表/空考试,保留已有数据"})
+            continue
+        imported.append(await _write_term(
+            db_path,
+            year=target_year,
+            term=target_term,
+            week1_monday=wk1,
+            semester=sem,
+            course_rows=course_rows,
+            exam_rows=exam_rows,
+        ))
+
+    if not imported:
+        details = "; ".join(f"{s['year']}第{s['term']}学期:{s['reason']}" for s in skipped)
+        raise zjut.ZjutError(details or "没有可导入的正方数据")
+
+    active = _choose_active(imported) or imported[0]
+    # 记下当前激活/最近导入的学期信息 + 本次导入时间(供界面显示);不碰 password/save 字段
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(db_path) as db:
         await db.execute("INSERT OR IGNORE INTO zjut_config (id, save_credentials) VALUES (1, 0)")
         await db.execute(
             "UPDATE zjut_config SET student_id=?, year=?, term=?, week1_monday=?, "
             "semester_label=?, last_import_at=? WHERE id=1",
-            (student_id, sem.get("year", year), sem.get("term", term), wk1,
-             sem.get("label", ""), now),
+            (student_id, active["year"], active["term"], active["week1_monday"],
+             active["semester_label"], now),
         )
         await db.commit()
     return {
         "ok": True,
-        "semester": sem.get("label", ""),
-        "courses_fetched": len(data["courses"]),
-        "course_sessions_written": len(course_rows),
-        "exams_written": len(exam_rows),
+        "semester": active["semester_label"],
+        "courses_fetched": sum(t["courses_fetched"] for t in imported),
+        "course_sessions_written": sum(t["courses_fetched"] for t in imported),
+        "exams_written": sum(t["exams_written"] for t in imported),
+        "prefetched_terms": imported,
+        "skipped_terms": skipped,
     }

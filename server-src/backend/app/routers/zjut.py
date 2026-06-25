@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import aiosqlite
 from fastapi import APIRouter, Request
 
 from app.config import settings
@@ -76,6 +77,14 @@ async def status():
     cfg = await zjut_import.get_config(settings.database_path)
     if not cfg:
         return {"configured": False}
+    async with aiosqlite.connect(settings.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT term_key, year, term, week1_monday, start_date, end_date,
+                      semester_label, courses_count, exams_count, last_import_at
+               FROM zjut_terms
+               ORDER BY start_date ASC"""
+        )).fetchall()
     return {
         "configured": True,
         "student_id": cfg.get("student_id"),
@@ -83,4 +92,19 @@ async def status():
         "week1_monday": cfg.get("week1_monday"),
         "credentials_saved": bool(cfg.get("save_credentials")),
         "last_import_at": cfg.get("last_import_at"),
+        "terms": [
+            {
+                "termKey": row["term_key"],
+                "year": row["year"],
+                "term": row["term"],
+                "semesterLabel": row["semester_label"],
+                "week1Monday": row["week1_monday"],
+                "startDate": row["start_date"],
+                "endDate": row["end_date"],
+                "coursesCount": row["courses_count"],
+                "examsCount": row["exams_count"],
+                "lastImportAt": row["last_import_at"],
+            }
+            for row in rows
+        ],
     }

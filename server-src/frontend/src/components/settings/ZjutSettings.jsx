@@ -24,7 +24,8 @@ export default function ZjutSettings() {
         body: JSON.stringify({ student_id: studentId.trim(), password, save_credentials: save }),
       });
       if (r.ok) {
-        setMsg({ ok: true, text: `导入成功 · ${r.semester} · ${r.course_sessions_written} 节课 / ${r.exams_written} 场考试` });
+        const terms = r.prefetched_terms?.length ? ` · 已预抓 ${r.prefetched_terms.length} 个时期` : "";
+        setMsg({ ok: true, text: `导入成功 · ${r.semester} · ${r.course_sessions_written} 节课 / ${r.exams_written} 场考试${terms}` });
         setPassword("");
         loadStatus();
       } else {
@@ -39,8 +40,9 @@ export default function ZjutSettings() {
     setBusy(true); setMsg(null);
     try {
       const r = await apiFetch("/api/zjut/refresh", { method: "POST" });
+      const terms = r.prefetched_terms?.length ? ` · 已预抓 ${r.prefetched_terms.length} 个时期` : "";
       setMsg(r.ok
-        ? { ok: true, text: `已刷新 · ${r.semester} · ${r.course_sessions_written} 节课 / ${r.exams_written} 场考试` }
+        ? { ok: true, text: `已刷新 · ${r.semester} · ${r.course_sessions_written} 节课 / ${r.exams_written} 场考试${terms}` }
         : { ok: false, text: r.error || "刷新失败" });
       loadStatus();
     } catch (e) {
@@ -67,6 +69,18 @@ export default function ZjutSettings() {
             )}
           </div>
           <p className="text-xs text-[var(--text-tertiary)]">学号 {status.student_id} · 上次导入 {fmt(status.last_import_at)}</p>
+          {!!status.terms?.length && (
+            <div className="space-y-1 rounded-xl bg-[var(--surface)]/70 p-2">
+              {status.terms.map((term) => (
+                <div key={term.termKey} className="flex items-center justify-between gap-2 text-[11px] text-[var(--text-secondary)]">
+                  <span className="truncate">{term.semesterLabel}</span>
+                  <span className="shrink-0 text-[var(--text-tertiary)]">
+                    {term.startDate || term.week1Monday} 起 · {term.coursesCount || 0} 节
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
           {status.credentials_saved && (
             <button onClick={doRefresh} disabled={busy}
               className="mt-1 inline-flex items-center gap-2 rounded-xl bg-[var(--hover-bg)] px-3 py-2 text-sm text-white hover:bg-[var(--hover-bg-strong)] disabled:opacity-40">
@@ -97,7 +111,7 @@ export default function ZjutSettings() {
         )}
         <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-[var(--text-tertiary)]">
           <ShieldCheck size={13} className="mt-0.5 shrink-0" />
-          学年/学期/开学日自动从教务读取，你只需学号密码。密码用 AES-GCM 加密存储、不进日志，仅用于登录正方拉取课表。
+          学年/学期/开学日会自动从教务和校历推断，并预抓可确定的短学期；密码用 AES-GCM 加密存储、不进日志，仅用于登录正方拉取课表。
         </p>
       </div>
     </div>

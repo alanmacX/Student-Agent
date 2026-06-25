@@ -212,6 +212,38 @@ def parse_schedule(payload) -> list[dict]:
             "classroom": _get(row, ["cdmc", "jxcdmc", "classroom"]),
             "campus": _get(row, ["xqmc", "campus"]),
         })
+    out.extend(parse_practice_schedule(payload))
+    return out
+
+
+def parse_practice_schedule(payload) -> list[dict]:
+    """Parse short-term / course-design rows from 正方 sjkList.
+
+    These rows usually describe practice blocks such as "计算机工程实践 1-4周"
+    rather than day/period-specific classes. Represent them as weekday daytime
+    blocks so the timetable has something useful to show during short term.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("sjkList"), list):
+        return []
+    out: list[dict] = []
+    for row in payload["sjkList"]:
+        if not isinstance(row, dict):
+            continue
+        name = _get(row, ["kcmc", "courseName", "课程名称"])
+        weeks = parse_weeks(_get(row, ["qsjsz", "zcd", "weeks"]))
+        if not name or not weeks:
+            continue
+        out.append({
+            "course": name,
+            "teacher": _get(row, ["jsxm", "xm", "teacher"]),
+            "weekdays": [1, 2, 3, 4, 5],
+            "start_section": 1,
+            "end_section": 9,
+            "weeks": weeks,
+            "classroom": _get(row, ["cdmc", "jxcdmc", "classroom"]),
+            "campus": _get(row, ["xqmc", "campus"]),
+            "kind": "practice",
+        })
     return out
 
 

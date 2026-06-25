@@ -807,7 +807,7 @@ async def get_schedule_sidebar(request: Request):
             except Exception:
                 pass
 
-    courses_local = await list_courses(settings.database_path, days=120, past_days=120)
+    courses_local = await list_courses(settings.database_path, days=240, past_days=240)
     events = await list_events(settings.database_path, days=120)
     reminders = await list_reminders(settings.database_path)
     zjut_term = await _load_zjut_term_meta()
@@ -836,17 +836,44 @@ async def get_schedule_sidebar(request: Request):
 
 async def _load_zjut_term_meta() -> dict | None:
     async with db_conn() as db:
-        row = await (await db.execute(
+        rows = await (await db.execute(
+            """SELECT term_key, year, term, xqm, week1_monday, start_date, end_date,
+                      semester_label, calendar_name, courses_count, exams_count, last_import_at
+               FROM zjut_terms
+               ORDER BY start_date ASC"""
+        )).fetchall()
+        fallback = await (await db.execute(
             "SELECT semester_label, week1_monday, last_import_at FROM zjut_config WHERE id=1"
         )).fetchone()
-    if not row:
+    if not rows and not fallback:
         return None
 
-    week1 = row["week1_monday"]
+    local_tz = ZoneInfo("Asia/Shanghai")
+    today = datetime.now(timezone.utc).astimezone(local_tz).date().isoformat()
+
+    terms = [dict(row) for row in rows]
+    active = None
+    for term in terms:
+        end = term.get("end_date") or term.get("start_date")
+        if term.get("start_date") and term["start_date"] <= today <= end:
+            active = term
+            break
+    if not active and terms:
+        past = [term for term in terms if term.get("start_date") and term["start_date"] <= today]
+        active = sorted(past, key=lambda t: t["start_date"])[-1] if past else sorted(terms, key=lambda t: t.get("start_date") or "")[0]
+
+    if not active and fallback:
+        active = {
+            "term_key": None,
+            "semester_label": fallback["semester_label"],
+            "week1_monday": fallback["week1_monday"],
+            "last_import_at": fallback["last_import_at"],
+        }
+
+    week1 = active.get("week1_monday") if active else None
     current_week = None
     if week1:
         try:
-            local_tz = ZoneInfo("Asia/Shanghai")
             base = datetime.fromisoformat(week1).replace(tzinfo=local_tz)
             now = datetime.now(timezone.utc).astimezone(local_tz)
             current_week = max(1, ((now.date() - base.date()).days // 7) + 1)
@@ -854,10 +881,30 @@ async def _load_zjut_term_meta() -> dict | None:
             current_week = None
 
     return {
-        "semesterLabel": row["semester_label"],
+        "termKey": active.get("term_key"),
+        "year": active.get("year"),
+        "term": active.get("term"),
+        "semesterLabel": active.get("semester_label"),
         "week1Monday": week1,
+        "startDate": active.get("start_date"),
+        "endDate": active.get("end_date"),
         "currentWeek": current_week,
-        "lastImportAt": row["last_import_at"],
+        "lastImportAt": active.get("last_import_at"),
+        "terms": [
+            {
+                "termKey": term.get("term_key"),
+                "year": term.get("year"),
+                "term": term.get("term"),
+                "semesterLabel": term.get("semester_label"),
+                "week1Monday": term.get("week1_monday"),
+                "startDate": term.get("start_date"),
+                "endDate": term.get("end_date"),
+                "coursesCount": term.get("courses_count"),
+                "examsCount": term.get("exams_count"),
+                "lastImportAt": term.get("last_import_at"),
+            }
+            for term in terms
+        ],
     }
 
 

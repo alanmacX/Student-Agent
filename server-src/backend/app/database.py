@@ -78,6 +78,21 @@ _SCHEMA = """
         updated_at       TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS zjut_terms (
+        term_key        TEXT PRIMARY KEY,
+        year            TEXT NOT NULL,
+        term            TEXT NOT NULL,
+        xqm             TEXT NOT NULL,
+        week1_monday    TEXT NOT NULL,
+        start_date      TEXT NOT NULL,
+        end_date        TEXT,
+        semester_label  TEXT NOT NULL,
+        calendar_name   TEXT NOT NULL,
+        courses_count   INTEGER NOT NULL DEFAULT 0,
+        exams_count     INTEGER NOT NULL DEFAULT 0,
+        last_import_at  TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS conversations (
         id                              TEXT PRIMARY KEY,
         title                           TEXT NOT NULL DEFAULT 'New Chat',
@@ -481,6 +496,20 @@ _COLUMN_MIGRATIONS: list[str] = [
 
     # ── zjut_config: semester label added after initial table ────────────
     "ALTER TABLE zjut_config ADD COLUMN semester_label TEXT",
+    """CREATE TABLE IF NOT EXISTS zjut_terms (
+        term_key        TEXT PRIMARY KEY,
+        year            TEXT NOT NULL,
+        term            TEXT NOT NULL,
+        xqm             TEXT NOT NULL,
+        week1_monday    TEXT NOT NULL,
+        start_date      TEXT NOT NULL,
+        end_date        TEXT,
+        semester_label  TEXT NOT NULL,
+        calendar_name   TEXT NOT NULL,
+        courses_count   INTEGER NOT NULL DEFAULT 0,
+        exams_count     INTEGER NOT NULL DEFAULT 0,
+        last_import_at  TEXT NOT NULL
+    )""",
 
     # ── dingtalk_filter_config: user-configurable filter rules ───────────
     # Single-row config table (id=1). conv_mode controls conversation filtering:
