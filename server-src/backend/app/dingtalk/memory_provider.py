@@ -14,6 +14,7 @@ standby agent).
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from datetime import datetime, timezone
@@ -92,6 +93,13 @@ def _batch_hash(messages: list[NormalisedMessage]) -> str:
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
 
+# Serializes sync runs within one process (APScheduler overlap, manual trigger
+# + scheduled job racing). Without it both runs fetch the same batch before
+# either commits the cursor → double LLM cost. Cross-process safety is not
+# needed: the backend runs as a single container.
+_SYNC_LOCK = asyncio.Lock()
+
+
 async def run_dingtalk_memory_sync(
     db_path: str,
     provider: dict,
@@ -102,7 +110,23 @@ async def run_dingtalk_memory_sync(
     """
     Fetch new DingTalk notify messages since last sync and run them
     through the context-bounded reconciler.
+    Concurrent callers are serialized; the second one sees the first's cursor.
     """
+    if _SYNC_LOCK.locked():
+        logger.info("DingTalk memory: another sync in flight, skipping this run")
+        return {"source": SOURCE_TYPE, "processed": 0, "effects": 0,
+                "skipped": "sync_in_flight"}
+    async with _SYNC_LOCK:
+        return await _run_sync_inner(db_path, provider, model, api_key, now)
+
+
+async def _run_sync_inner(
+    db_path: str,
+    provider: dict,
+    model: str,
+    api_key: str,
+    now: datetime | None,
+) -> dict[str, Any]:
     if now is None:
         now = datetime.now(timezone.utc)
 

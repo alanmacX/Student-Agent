@@ -538,6 +538,22 @@ async def _audit_op(db_path: str, msg: dict, tool_name: str, op: dict, summary: 
         await db.commit()
 
 
+_ENTITY_NAME_MAX = 60
+# Characters that never appear in legitimate course/project names but do show
+# up when the model echoes prompt-injection text back as an entity name.
+_ENTITY_NAME_SANITIZE_RE = None  # compiled lazily
+
+
+def _sanitize_entity_name(raw: str) -> str:
+    import re
+
+    # Strip SQL-ish punctuation fragments; injection itself is already dead
+    # (parameterized queries) — this just keeps the entity directory readable.
+    name = re.sub(r"[;'\")\-]{1,2}|/\*|\*/", "", raw)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name[:_ENTITY_NAME_MAX]
+
+
 async def _resolve_entity_for_op(db_path: str, op: dict, msg: dict, now_iso: str) -> str | None:
     ent = str(op.get("entity") or "").strip()
     async with aiosqlite.connect(db_path) as db:
@@ -546,9 +562,11 @@ async def _resolve_entity_for_op(db_path: str, op: dict, msg: dict, now_iso: str
             row = await (await db.execute("SELECT id FROM entities WHERE id=? AND status='active'", (ent,))).fetchone()
             return row["id"] if row else None
         if ent.startswith("new:"):
-            name = ent[4:].strip()
+            name = _sanitize_entity_name(ent[4:].strip())
         else:
-            name = msg.get("conversation_title") or ent or "未分类"
+            name = _sanitize_entity_name(msg.get("conversation_title") or ent or "未分类")
+        if not name:
+            name = "未分类"
         etype = "course" if (msg.get("conversation_title") or op.get("kind") in {"assignment", "exam", "course_change"}) else "project"
         eid = await upsert_entity(db, etype=etype, name=name, aliases=[], attrs={}, now=now_iso)
         await sync_entity_fts(db, eid)
