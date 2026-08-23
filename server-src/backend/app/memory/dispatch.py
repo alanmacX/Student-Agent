@@ -36,23 +36,43 @@ async def notify_now(
     notif_type: str = "automation",
     data: dict | None = None,
 ) -> dict:
-    """Send an immediate push, deduped + logged.
+    """Send an immediate push, deduped + gated + logged.
 
     ``item_id`` identifies the underlying thing being notified about; if omitted
-    it is derived from the content so identical pushes collapse. Returns a dict
-    describing what happened (``skipped`` when deduped).
+    it is derived from the content so identical pushes collapse.
+
+    Safety net (push_gate): daily budget + cooldown, independent of content —
+    a hallucinating LLM cannot exceed N pushes/day no matter what it emits.
+    Gate-rejected pushes are parked for the evening digest instead of dropped.
     """
     from app.services.push_service import (
         send_push_to_all_subscribers,
         has_notified,
         log_notification_sent,
     )
+    from datetime import datetime, timezone as _tz
 
     item_id = item_id or "auto-" + _stable_id(notif_type, title, body)[:16]
 
     if await has_notified(db_path, item_id, notif_type):
         logger.debug("notify_now deduped item_id=%s type=%s", item_id, notif_type)
         return {"skipped": True, "item_id": item_id}
+
+    # Content-independent gate — LAST line of defense before the phone buzzes.
+    gate = {"allowed": True, "reason": "gate_disabled"}
+    try:
+        from app.services.push_gate import check_push_budget, record_gate_overflow
+
+        gate = await check_push_budget(db_path, notif_type=notif_type)
+    except Exception:
+        logger.exception("push_gate check failed; failing open")
+    if not gate.get("allowed"):
+        try:
+            await record_gate_overflow(db_path, title, body)
+        except Exception:
+            logger.exception("push_gate overflow parking failed")
+        return {"skipped": True, "gated": True, "reason": gate.get("reason"),
+                "queued_for_digest": True, "item_id": item_id}
 
     tag = f"{notif_type}-{item_id}"
     payload = {**(data or {}), "tag": tag, "item_id": item_id}

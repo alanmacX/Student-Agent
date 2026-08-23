@@ -27,6 +27,7 @@ def init_scheduler(app_state):
     from app.dingtalk.task import run_dingtalk_sync
     from app.dingtalk.task import run_dingtalk_memory_task
     from app.tasks.health_monitor import run_health_check
+    from app.tasks.push_review import run_push_review
 
     scheduler.add_job(
         run_chaoxing_probe_adaptive,
@@ -89,6 +90,16 @@ def init_scheduler(app_state):
         CronTrigger(hour=2, minute=30),
         args=[app_state],
         id="distill",
+        misfire_grace_time=600,
+        replace_existing=True,
+    )
+    # Nightly semantic review of the day's immediate pushes — the slow second
+    # look behind the regex guard; auto-tightens budget on noisy days.
+    scheduler.add_job(
+        run_push_review,
+        CronTrigger(hour=21, minute=40),   # before the 22:00 digest
+        args=[app_state],
+        id="push_review",
         misfire_grace_time=600,
         replace_existing=True,
     )
