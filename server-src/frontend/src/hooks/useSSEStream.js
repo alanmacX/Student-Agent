@@ -1,24 +1,27 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { getAccessToken } from "../api/client";
+import { getAccessToken, apiFetch } from "../api/client";
+import { consumeSSE, dispatchSSEEvent } from "../lib/stream";
 
-export function useSSEStream({ onText, onReasoning, onUsage, onToolStart, onToolResult, onSchedulePayload, onPendingConfirmation, onDone, onError }) {
+/**
+ * One streaming request at a time; aborts on unmount.
+ * Callbacks live in a ref so `startStream` identity is stable even when
+ * callers pass inline closures (the old dep-array version churned identity
+ * every render and re-created the callback graph mid-stream).
+ */
+export function useSSEStream(callbacks) {
   const isStreamingRef = useRef(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const controllerRef = useRef(null);
+  const cbRef = useRef(callbacks);
+  cbRef.current = callbacks;
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      controllerRef.current?.abort();
-    };
-  }, []);
+  useEffect(() => () => controllerRef.current?.abort(), []);
 
   const startStream = useCallback(async (url, body) => {
     if (isStreamingRef.current) return;
     isStreamingRef.current = true;
     setIsStreaming(true);
     controllerRef.current = new AbortController();
-
     try {
       const token = getAccessToken();
       const resp = await fetch(url, {
@@ -30,55 +33,14 @@ export function useSSEStream({ onText, onReasoning, onUsage, onToolStart, onTool
         body: JSON.stringify(body),
         signal: controllerRef.current.signal,
       });
-
-      if (!resp.ok) {
-        if (resp.status === 401) window.dispatchEvent(new CustomEvent("access-token-required"));
-        throw new Error(`HTTP ${resp.status}`);
-      }
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const payload = line.slice(6).trim();
-          if (!payload) continue;
-
-          try {
-            const event = JSON.parse(payload);
-            switch (event.type) {
-              case "text": onText?.(event.content); break;
-              case "reasoning": onReasoning?.(event.content); break;
-              case "usage": onUsage?.(event.usage); break;
-              case "tool_start": onToolStart?.(event.tools); break;
-              case "tool_result": onToolResult?.(event); break;
-              case "schedule_payload": onSchedulePayload?.(event); break;
-              case "pending_confirmation": onPendingConfirmation?.(event); break;
-              case "done": onDone?.(); break;
-              case "error": onError?.(event.message); break;
-              case "cancelled": onDone?.(); break;
-            }
-          } catch (_) {}
-        }
-      }
+      await consumeSSE(resp, (event) => dispatchSSEEvent(event, cbRef.current));
     } catch (err) {
-      if (err.name !== "AbortError") {
-        onError?.(err.message);
-      }
+      if (err.name !== "AbortError") cbRef.current.onError?.(err.message);
     } finally {
       isStreamingRef.current = false;
       setIsStreaming(false);
     }
-  }, [onText, onReasoning, onUsage, onToolStart, onToolResult, onSchedulePayload, onPendingConfirmation, onDone, onError]);
+  }, []);
 
   const stopStream = useCallback(() => {
     controllerRef.current?.abort();
@@ -88,3 +50,6 @@ export function useSSEStream({ onText, onReasoning, onUsage, onToolStart, onTool
 
   return { startStream, stopStream, isStreaming };
 }
+
+// Re-exported for callers that imported it from here historically.
+export { apiFetch };

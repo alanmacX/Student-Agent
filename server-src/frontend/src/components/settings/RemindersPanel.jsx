@@ -3,14 +3,11 @@ import {
   Plus, Trash2, Star, StarOff, Check, Clock, RefreshCw, AlarmClock
 } from "lucide-react";
 import { fetchReminders, createReminder, updateReminder, deleteReminder } from "../../api/reminders";
+import { useConfirmArm } from "../../lib/hooks";
+import { dueTone } from "../../lib/time";
 
 function dueColor(dueDate) {
-  if (!dueDate) return "";
-  const diff = new Date(dueDate).getTime() - Date.now();
-  if (diff < 0) return "text-red-400";
-  if (diff < 24 * 3600 * 1000) return "text-orange-400";
-  if (diff < 72 * 3600 * 1000) return "text-yellow-400";
-  return "text-[var(--text-tertiary)]";
+  return dueTone(dueDate);
 }
 
 function formatDue(dueDate) {
@@ -33,17 +30,12 @@ function formatDue(dueDate) {
 }
 
 function ReminderItem({ item, onToggle, onDelete, onToggleImportant }) {
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, attemptDelete] = useConfirmArm();
   const dueFmt = formatDue(item.dueDate);
   const dueCls = dueColor(item.dueDate);
 
   const handleDelete = () => {
-    if (confirming) {
-      onDelete(item.id);
-    } else {
-      setConfirming(true);
-      setTimeout(() => setConfirming(false), 2000);
-    }
+    if (attemptDelete()) onDelete(item.id);
   };
 
   return (

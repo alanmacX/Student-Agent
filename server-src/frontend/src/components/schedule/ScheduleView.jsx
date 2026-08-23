@@ -4,6 +4,8 @@ import { useSSEStream } from "../../hooks/useSSEStream";
 import { useScheduleSessions } from "../../hooks/useScheduleSessions";
 import { apiFetch } from "../../api/client";
 import { createReminder } from "../../api/reminders";
+import { findLastIndex } from "../../lib/compat";
+import { useConfirmArm } from "../../lib/hooks";
 import MessageBubble from "../chat/MessageBubble";
 import ChatInput from "../chat/ChatInput";
 import ImportModal from "./ImportModal";
@@ -49,16 +51,11 @@ function AgentStatusBar({ status }) {
 
 // ── Session item ──────────────────────────────────────────────────────────────
 function SessionItem({ session, active, onSelect, onDelete }) {
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, attemptDelete] = useConfirmArm();
 
   const handleDelete = (e) => {
     e.stopPropagation();
-    if (confirming) {
-      onDelete(session.id);
-    } else {
-      setConfirming(true);
-      setTimeout(() => setConfirming(false), 2000);
-    }
+    if (attemptDelete()) onDelete(session.id);
   };
 
   return (
@@ -178,16 +175,21 @@ export default function ScheduleView() {
     }
   }, []);
 
-  // On mount: use initSession to pick or auto-create session (respects 12h rule)
+  // On mount: use initSession to pick or auto-create session (respects 12h rule).
+  // initSession fetches a fresh list itself, so we don't depend on the stale
+  // `sessions` state captured at first render. If the id isn't in the current
+  // list yet, fall back to a minimal object — the sync effect below reconciles
+  // it once the list arrives.
   useEffect(() => {
-    if (sessionsLoading) return;
-    if (activeSession) return;
+    if (sessionsLoading || activeSession) return;
+    let cancelled = false;
     (async () => {
       const id = await initSession();
-      if (id) {
-        setActiveSession((prev) => prev || sessions.find((s) => s.id === id) || sessions[0] || null);
-      }
+      if (!id || cancelled) return;
+      setActiveSession((prev) => prev || { id, title: "新对话" });
     })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionsLoading]);
 
   // Keep activeSession in sync if sessions list changes (e.g. after delete)
@@ -208,8 +210,12 @@ export default function ScheduleView() {
   useEffect(() => {
     const handler = (event) => {
       if (event.detail?.tab && event.detail.tab !== "agent") return;
-      refreshSessions();
-      if (activeSession?.id) loadMessages(activeSession.id);
+      Promise.all([
+        refreshSessions(),
+        activeSession?.id ? loadMessages(activeSession.id) : null,
+      ]).finally(() => {
+        window.dispatchEvent(new CustomEvent("app-refresh-done", { detail: { tab: "agent" } }));
+      });
     };
     window.addEventListener("app-refresh", handler);
     return () => window.removeEventListener("app-refresh", handler);
@@ -229,7 +235,7 @@ export default function ScheduleView() {
     onText: (chunk) => {
       setAgentStatus("生成回复...");
       setMessages((prev) => {
-        const lastIdx = prev.findLastIndex((m) => m.role === "assistant" && m._streaming);
+        const lastIdx = findLastIndex(prev, (m) => m.role === "assistant" && m._streaming);
         if (lastIdx !== -1) {
           const updated = [...prev];
           updated[lastIdx] = { ...updated[lastIdx], content: updated[lastIdx].content + chunk };
@@ -241,7 +247,7 @@ export default function ScheduleView() {
     onReasoning: (chunk) => {
       setAgentStatus("思考中...");
       setMessages((prev) => {
-        const lastIdx = prev.findLastIndex((m) => m.role === "assistant" && m._streaming);
+        const lastIdx = findLastIndex(prev, (m) => m.role === "assistant" && m._streaming);
         if (lastIdx !== -1) {
           const updated = [...prev];
           updated[lastIdx] = { ...updated[lastIdx], reasoning: (updated[lastIdx].reasoning || "") + chunk };
@@ -277,7 +283,7 @@ export default function ScheduleView() {
     },
     onSchedulePayload: (event) => {
       setMessages((prev) => {
-        const lastIdx = prev.findLastIndex((m) => m.role === "assistant" && m._streaming);
+        const lastIdx = findLastIndex(prev, (m) => m.role === "assistant" && m._streaming);
         if (lastIdx !== -1) {
           const updated = [...prev];
           const existing = updated[lastIdx].schedulePayload;
@@ -300,7 +306,7 @@ export default function ScheduleView() {
       setAgentStatus("等待确认");
       setMessages((prev) => {
         const stopped = prev.map((m) => (m._streaming ? { ...m, _streaming: false } : m));
-        const lastIdx = stopped.findLastIndex((m) => m.role === "assistant");
+        const lastIdx = findLastIndex(stopped, (m) => m.role === "assistant");
         if (lastIdx !== -1) {
           const updated = [...stopped];
           updated[lastIdx] = { ...updated[lastIdx], pendingConfirmation: pending };

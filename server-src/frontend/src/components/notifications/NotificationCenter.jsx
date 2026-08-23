@@ -1,12 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Bell, Clock, Brain, Star, RefreshCw, Send, History, Activity } from "lucide-react";
 import { fetchNotifications, fetchScheduledNotifications, fetchStandbyLog } from "../../api/notifications";
-
-function parseUTC(isoStr) {
-  if (!isoStr) return new Date(0);
-  const s = /[Z+]/.test(isoStr) ? isoStr : isoStr + "Z";
-  return new Date(s);
-}
+import { relativeTime, dayKey, groupByDay, timeUntil } from "../../lib/time";
+import { useVisibilityPoll } from "../../lib/hooks";
 
 const POLL_INTERVAL = 30_000; // 30s
 
@@ -25,43 +21,6 @@ function typeLabel(notifType) {
   if (notifType.startsWith("standby")) return "待机提醒";
   if (notifType.startsWith("scheduled")) return "定时通知";
   return notifType;
-}
-
-function relativeTime(isoStr) {
-  if (!isoStr) return "";
-  const diff = Date.now() - parseUTC(isoStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  const hours = Math.floor(mins / 60);
-  const days = Math.floor(hours / 24);
-  if (days > 0) return `${days} 天前`;
-  if (hours > 0) return `${hours} 小时前`;
-  if (mins > 0) return `${mins} 分钟前`;
-  return "刚刚";
-}
-
-function dayKey(isoStr) {
-  if (!isoStr) return "未知日期";
-  const d = parseUTC(isoStr);
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  if (d.toDateString() === today.toDateString()) return "今天";
-  if (d.toDateString() === yesterday.toDateString()) return "昨天";
-  return d.toLocaleDateString("zh-CN", { month: "long", day: "numeric" });
-}
-
-function groupByDay(notifications) {
-  const groups = [];
-  const seen = {};
-  for (const item of notifications) {
-    const key = dayKey(item.sent_at);
-    if (!seen[key]) {
-      seen[key] = [];
-      groups.push({ label: key, items: seen[key] });
-    }
-    seen[key].push(item);
-  }
-  return groups;
 }
 
 function StatusPill({ label, color }) {
@@ -257,14 +216,7 @@ function DecisionBadge({ decision }) {
 }
 
 function formatScheduledTime(isoStr) {
-  const diff = parseUTC(isoStr).getTime() - Date.now();
-  if (diff < 0) return "已到期";
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}min 后`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h 后`;
-  const days = Math.floor(hours / 24);
-  return `${days}天后`;
+  return timeUntil(isoStr);
 }
 
 export default function NotificationCenter() {
@@ -275,7 +227,6 @@ export default function NotificationCenter() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const pollRef = useRef(null);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -299,41 +250,16 @@ export default function NotificationCenter() {
     }
   }, []);
 
+  // Poll every 30s while visible; auto-pauses when hidden.
+  useVisibilityPoll(() => load(true), POLL_INTERVAL);
+
   useEffect(() => {
     load();
-
-    const startPolling = () => {
-      if (pollRef.current) return;
-      pollRef.current = window.setInterval(() => load(true), POLL_INTERVAL);
-    };
-    const stopPolling = () => {
-      if (pollRef.current) {
-        window.clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-
-    const onVisibilityChange = () => {
-      if (document.hidden) {
-        stopPolling();
-      } else {
-        load(true);
-        startPolling();
-      }
-    };
-
-    startPolling();
-    document.addEventListener("visibilitychange", onVisibilityChange);
     const onAppRefresh = (event) => {
       if (!event.detail?.tab || event.detail.tab === "notifications") load(true);
     };
     window.addEventListener("app-refresh", onAppRefresh);
-
-    return () => {
-      stopPolling();
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      window.removeEventListener("app-refresh", onAppRefresh);
-    };
+    return () => window.removeEventListener("app-refresh", onAppRefresh);
   }, [load]);
 
   const groups = groupByDay(notifications);

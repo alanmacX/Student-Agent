@@ -1,3 +1,5 @@
+import { consumeSSE, dispatchSSEEvent } from "../lib/stream";
+
 const BASE_URL = "";
 const TOKEN_KEY = "access_token";
 
@@ -31,38 +33,38 @@ function authHeaders(headers = {}) {
   };
 }
 
-async function handleUnauthorized(resp) {
-  if (resp.status === 401) {
-    window.dispatchEvent(new CustomEvent("access-token-required"));
-  }
+async function parseError(resp) {
+  let detail = "";
+  try {
+    detail = await resp.text();
+  } catch (_) { /* body already consumed */ }
+  throw new Error(`HTTP ${resp.status}: ${detail}`);
 }
 
-export async function apiFetch(path, options = {}) {
+async function request(path, options = {}, transform) {
   const { headers, ...rest } = options;
   const resp = await fetch(`${BASE_URL}${path}`, {
     ...rest,
     headers: authHeaders(headers),
   });
   if (!resp.ok) {
-    await handleUnauthorized(resp);
-    throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+    if (resp.status === 401) {
+      window.dispatchEvent(new CustomEvent("access-token-required"));
+    }
+    await parseError(resp);
   }
-  return resp.json();
+  return transform(resp);
 }
 
-export async function apiFetchBlob(path, options = {}) {
-  const { headers, ...rest } = options;
-  const resp = await fetch(`${BASE_URL}${path}`, {
-    ...rest,
-    headers: authHeaders(headers),
-  });
-  if (!resp.ok) {
-    await handleUnauthorized(resp);
-    throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
-  }
-  return resp.blob();
+export function apiFetch(path, options = {}) {
+  return request(path, options, (r) => r.json());
 }
 
+export function apiFetchBlob(path, options = {}) {
+  return request(path, options, (r) => r.blob());
+}
+
+/** POST + stream SSE events to callbacks. Returns an AbortController. */
 export function apiStream(path, body, callbacks) {
   const controller = new AbortController();
 
@@ -74,67 +76,9 @@ export function apiStream(path, body, callbacks) {
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-
-      if (!resp.ok) {
-        await handleUnauthorized(resp);
-        throw new Error(`HTTP ${resp.status}`);
-      }
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const payload = line.slice(6).trim();
-          if (!payload) continue;
-
-          try {
-            const event = JSON.parse(payload);
-            switch (event.type) {
-              case "text":
-                callbacks.onText?.(event.content);
-                break;
-              case "reasoning":
-                callbacks.onReasoning?.(event.content);
-                break;
-              case "usage":
-                callbacks.onUsage?.(event.usage);
-                break;
-              case "tool_start":
-                callbacks.onToolStart?.(event.tools);
-                break;
-              case "tool_result":
-                callbacks.onToolResult?.(event);
-                break;
-              case "pending_confirmation":
-                callbacks.onPendingConfirmation?.(event);
-                break;
-              case "done":
-                callbacks.onDone?.();
-                break;
-              case "error":
-                callbacks.onError?.(event.message);
-                break;
-              case "cancelled":
-                callbacks.onDone?.();
-                break;
-            }
-          } catch (_) {}
-        }
-      }
+      await consumeSSE(resp, (event) => dispatchSSEEvent(event, callbacks));
     } catch (err) {
-      if (err.name !== "AbortError") {
-        callbacks.onError?.(err.message);
-      }
+      if (err.name !== "AbortError") callbacks.onError?.(err.message);
     }
   })();
 

@@ -53,7 +53,9 @@ export default function ChatView({ conversation, onConversationUpdate, onOpenSid
             { ...last, reasoning: (last.reasoning || "") + chunk },
           ];
         }
-        return prev;
+        // Models often stream reasoning before any text — open the streaming
+        // bubble now so leading reasoning isn't dropped on the floor.
+        return [...prev, { role: "assistant", content: "", reasoning: chunk, _streaming: true }];
       });
     },
     onUsage: (u) => setUsage(u),

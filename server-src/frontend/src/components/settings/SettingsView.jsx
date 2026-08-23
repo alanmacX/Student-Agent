@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Key, Bell, LogIn, Database, MessageCircle, Coins, GraduationCap } from "lucide-react";
 import ProviderSettings from "./ProviderSettings";
 import PushSettings from "./PushSettings";
@@ -20,6 +20,19 @@ const TABS = [
 
 export default function SettingsView() {
   const [tab, setTab] = useState("providers");
+
+  // Nothing to fetch on pull-to-refresh (settings are form-driven); report
+  // completion immediately so the global spinner doesn't wait out its 5s
+  // safety timeout on this tab.
+  useEffect(() => {
+    const handler = (event) => {
+      if (!event.detail?.tab || event.detail.tab === "settings") {
+        window.dispatchEvent(new CustomEvent("app-refresh-done", { detail: { tab: "settings" } }));
+      }
+    };
+    window.addEventListener("app-refresh", handler);
+    return () => window.removeEventListener("app-refresh", handler);
+  }, []);
 
   return (
     <div className="relative flex h-full flex-col bg-[var(--panel-bg)] md:flex-row md:gap-4 md:p-4 lg:gap-5 lg:p-6">

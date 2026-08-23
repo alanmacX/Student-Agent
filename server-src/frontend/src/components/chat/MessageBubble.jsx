@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -25,7 +25,12 @@ const HTML_SCHEMA = {
 
 export default function MessageBubble({ message, onConfirm, onCancel }) {
   const [copied, setCopied] = useState(false);
-  const [showReasoning, setShowReasoning] = useState(false);
+  // Auto-open while streaming; once the user manually toggles, respect their
+  // choice (was: boolean deps made streaming updates miss the effect and the
+  // panel snapped shut mid-read after done).
+  const [showReasoning, setShowReasoning] = useState(!!message._streaming);
+  const userToggledRef = useRef(false);
+  const lastAutoRef = useRef(!!message._streaming);
   const [confirmed, setConfirmed] = useState(false);
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
@@ -43,10 +48,14 @@ export default function MessageBubble({ message, onConfirm, onCancel }) {
   const pending = message.pendingConfirmation;
 
   useEffect(() => {
-    if (reasoning) {
-      setShowReasoning(!!message._streaming);
+    const streaming = !!message._streaming;
+    if (streaming !== lastAutoRef.current) {
+      lastAutoRef.current = streaming;
+      if (!userToggledRef.current) setShowReasoning(streaming && !!reasoning);
+    } else if (streaming && !reasoning) {
+      setShowReasoning(false);
     }
-  }, [!!message._streaming, !!reasoning]);
+  }, [message._streaming, reasoning]);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(message.content);
@@ -87,7 +96,7 @@ export default function MessageBubble({ message, onConfirm, onCancel }) {
       >
         {reasoning && (
           <div className="mb-2">
-            <button onClick={() => setShowReasoning(!showReasoning)}
+            <button onClick={() => { userToggledRef.current = true; setShowReasoning(!showReasoning); }}
               className="flex items-center gap-1.5 text-xs text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors">
               <Brain size={12} className="shrink-0" />
               {showReasoning ? <ChevronDown size={12} /> : <ChevronRight size={12} />}

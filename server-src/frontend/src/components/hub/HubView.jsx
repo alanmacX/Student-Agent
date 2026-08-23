@@ -45,6 +45,7 @@ export default function HubView() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      window.dispatchEvent(new CustomEvent("app-refresh-done", { detail: { tab: "hub" } }));
     }
   };
 
