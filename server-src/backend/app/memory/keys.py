@@ -46,7 +46,16 @@ def register_kind(kind: str, builder: KeyBuilder) -> None:
 
 
 def _default_builder(kind: str) -> KeyBuilder:
-    return lambda f: f"{kind}::" + normalize(str(f.get("title") or ""))
+    # Message-like keys include the conversation so identical wording from two
+    # different groups never merges (the "道歉" incident: a 习概-group apology
+    # and a database-course item must not collapse into one key).
+    def build(f: dict) -> str:
+        course = str(f.get("course") or "")
+        title = normalize(str(f.get("title") or ""))
+        if kind == "message" or kind not in _BUILDERS:
+            return f"{kind}::" + normalize(course) + "::" + title
+        return f"{kind}::" + title
+    return build
 
 
 def canonical_dedupe_key(kind: str, **fields) -> str:

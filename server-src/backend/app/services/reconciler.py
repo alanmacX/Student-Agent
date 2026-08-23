@@ -51,6 +51,15 @@ SYSTEM_PROMPT = """你是学生个人助理的消息 Reconciler。你只能把�
 - due 必须是 ISO-8601 带时区；没有明确时间用 null。
 - push_now 只有在 ref_item 是上下文 item id 时才用。
 
+只提取需要用户未来行动的事项（时间语义）：
+- new_item 只用于「用户还需要做某事」：未交作业、将来的考试/调课/报名、有明确后续动作的通知。
+- 群聊里已经发生的对话不算事项：道歉、道谢、确认收到（"收到""好的""已读"）、解释、争论、
+  已完成的沟通（"已经和老师说过"）、纯情绪表达 → 一律不产生任何 op，输出 {"ops":[]}。
+- 判断标准：如果这件事在消息发出时就已经完成或不可能再行动，它就是历史，不是待办。
+  例："我向老师解释了没看到网课" 是历史；"周五前提交报告" 才是待办。
+- importance=2（高）只给：有截止时间、或当天必须行动的事。聊天寒暄、过程性发言一律 ≤1。
+- 拿不准是否需要用户行动时：输出 conflict 让用户裁决，不要猜成 new_item。
+
 op schema:
 new_item: {"op":"new_item","kind":"assignment|exam|course_change|notice|signup","entity":"ent_x|new:名称","title":"...","due":"ISO|null","importance":2}
 update_item: {"op":"update_item","id":"item id","due":"ISO","note":"..."}
@@ -319,11 +328,20 @@ def _validate_ops(ops: list, ctx: dict, now: datetime) -> tuple[list[dict], list
             op = {**op, "ids": ids}
         elif name == "new_item":
             due_raw = op.get("due")
+            due = None
             if due_raw:
                 due = _parse_dt(due_raw)
                 if not due or due < now - timedelta(hours=1):
                     warnings.append("discarded new_item: invalid due")
                     continue
+            # A deadline-less item has no business being high-importance: that
+            # combination is exactly what produced the ladder_now spam incident
+            # ("向数据库老师道歉" pushed as urgent with no action possible).
+            # Demote instead of dropping — the info is still worth keeping.
+            kind_norm = _normalize_kind(op.get("kind"))
+            if kind_norm == "notice" and due is None and _importance_text(op.get("importance")) == "high":
+                op = {**op, "importance": 1}
+                warnings.append("demoted new_item: notice without due downgraded to medium")
             ent = str(op.get("entity") or "")
             if ent.startswith("ent_") and ent not in entity_ids:
                 warnings.append("discarded new_item: entity id not in context")

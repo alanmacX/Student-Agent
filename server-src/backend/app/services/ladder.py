@@ -23,6 +23,23 @@ class LadderStep:
     body: str
 
 
+# Titles/bodies matching these are conversational echoes, not actionable items.
+_ACK_NOISE_RE = None  # compiled lazily
+
+
+def _is_ack_noise(text: str) -> bool:
+    global _ACK_NOISE_RE
+    import re
+
+    if _ACK_NOISE_RE is None:
+        _ACK_NOISE_RE = re.compile(
+            r"道歉|已读|已阅|收到|谢谢|感谢|不客气|好的|抱歉|对不起|"
+            r"消息已读|回复老师|已回复|已联系|已提交|已完成|已解决|"
+            r"提交了消息|发送了消息|表情包|[呲牙]|[微笑]"
+        )
+    return bool(_ACK_NOISE_RE.search(text or ""))
+
+
 def build_ladder(
     kind: str,
     due: datetime | None,
@@ -66,6 +83,11 @@ def build_ladder(
             ("day_0900", _local_day_at(due, 0, time(9, 0)), "今天截止", f"{title} 今天截止。{body}"),
         ])
     elif normalized == "notice" and _is_high(importance):
+        # ACK/conversation-echo guard: titles like "向X老师道歉"/"已读群消息" are
+        # past-tense chat history, never actionable — pushing them was the
+        # 2026-07 spam incident. Cheap regex beats a wrong buzz on the phone.
+        if _is_ack_noise(title) or _is_ack_noise(body):
+            return []
         steps.append(("now", now, title[:18] or "重要通知", body))
 
     result: list[LadderStep] = []
