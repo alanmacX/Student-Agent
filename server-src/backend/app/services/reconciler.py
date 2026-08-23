@@ -69,6 +69,7 @@ async def reconcile_message(
     model: str,
     api_key: str,
     now: datetime | None = None,
+    sibling_messages: list[dict] | None = None,
 ) -> ReconcileResult:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -76,7 +77,7 @@ async def reconcile_message(
         now = now.replace(tzinfo=timezone.utc)
 
     text = (msg.get("text") or "").strip()
-    if len(text) < 5:
+    if len(text) < 5 and not sibling_messages:
         return ReconcileResult()
     if not provider or not api_key:
         return ReconcileResult(ok=False, errors=["missing_provider_or_api_key"])
@@ -89,11 +90,13 @@ async def reconcile_message(
         pass
 
     ctx = await _build_context_package(db_path, msg, now)
-    raw = await _call_model(provider, model, api_key, now, ctx["text"], msg, db_path)
+    raw = await _call_model(provider, model, api_key, now, ctx["text"], msg, db_path,
+                            sibling_messages=sibling_messages)
     parsed = _parse_json(raw)
     if parsed.get("need_more") and parsed.get("lookup_entity"):
         extra = await _lookup_entity_context(db_path, str(parsed.get("lookup_entity")), now)
-        raw = await _call_model(provider, model, api_key, now, ctx["text"] + "\n\n补充实体:\n" + extra, msg, db_path)
+        raw = await _call_model(provider, model, api_key, now, ctx["text"] + "\n\n补充实体:\n" + extra,
+                                msg, db_path, sibling_messages=sibling_messages)
         parsed = _parse_json(raw)
 
     ops = parsed.get("ops") if isinstance(parsed.get("ops"), list) else []
@@ -251,11 +254,20 @@ async def _lookup_entity_context(db_path: str, name: str, now: datetime) -> str:
     return "\n".join(parts)
 
 
-async def _call_model(provider: dict, model: str, api_key: str, now: datetime, context: str, msg: dict, db_path: str) -> str:
+async def _call_model(provider: dict, model: str, api_key: str, now: datetime, context: str,
+                      msg: dict, db_path: str, sibling_messages: list[dict] | None = None) -> str:
     from app.services.agent_service import AgentMsg, agent_complete
+
+    siblings = ""
+    if sibling_messages:
+        lines = []
+        for s in sibling_messages[-6:]:
+            lines.append(f"- {s.get('sender_name') or '?'}: {(s.get('text') or '')[:200]}")
+        siblings = "\n同会话邻近消息（同一话题，请合并判断，避免重复建条目）:\n" + "\n".join(lines)
 
     user = f"""上下文包:
 {context}
+{siblings}
 
 待处理消息:
 {(msg.get('text') or '')[:800]}"""

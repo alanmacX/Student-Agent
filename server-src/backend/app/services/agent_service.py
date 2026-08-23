@@ -39,6 +39,11 @@ class AgentResponse:
     stop_reason: str  # "end_turn" | "tool_use" | "max_tokens"
 
 
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_MAX_ATTEMPTS = 3
+_RETRY_BASE_DELAY = 1.5  # seconds; exponential: 1.5, 3
+
+
 async def agent_complete(
     messages: list[AgentMsg],
     tools: list[ToolDefinition],
@@ -51,26 +56,66 @@ async def agent_complete(
     thinking_enabled: bool | None = None,
     reasoning_effort: str = "high",
 ) -> AgentResponse:
-    from .api_service import get_http_client, _endpoint_url, _openai_auth_headers, UsageStats
+    """Single LLM call with bounded retry on transient provider errors.
+
+    Retries 429/5xx and network-level failures with exponential backoff.
+    Honors Retry-After on 429 when present. Non-retryable 4xx (401/400/…)
+    raise immediately.
+
+    NOTE: the OpenAI path already retries internally for DeepSeek
+    (post_json_with_retries); this outer loop covers every other provider
+    without stacking (DeepSeek inner attempts=3, outer sees the raised error
+    only after the inner loop is exhausted — acceptable worst case for a
+    single-user app).
+    """
+    import asyncio as _asyncio
 
     api_type = provider.get("api_type", "openAI")
     base_url = provider.get("base_url", "https://api.openai.com")
 
-    if api_type == "anthropic":
-        return await _anthropic_agent_complete(messages, tools, model, api_key, base_url, thinking_budget)
-    else:
-        return await _openai_agent_complete(
-            messages,
-            tools,
-            model,
-            api_key,
-            base_url,
-            thinking_budget=thinking_budget,
-            response_format=response_format,
-            max_tokens=max_tokens,
-            thinking_enabled=thinking_enabled,
-            reasoning_effort=reasoning_effort,
-        )
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            if api_type == "anthropic":
+                return await _anthropic_agent_complete(
+                    messages, tools, model, api_key, base_url,
+                    thinking_budget,
+                )
+            return await _openai_agent_complete(
+                messages,
+                tools,
+                model,
+                api_key,
+                base_url,
+                thinking_budget=thinking_budget,
+                response_format=response_format,
+                max_tokens=max_tokens,
+                thinking_enabled=thinking_enabled,
+                reasoning_effort=reasoning_effort,
+            )
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status not in _RETRYABLE_STATUS or attempt == _MAX_ATTEMPTS - 1:
+                raise
+            delay = _RETRY_BASE_DELAY * (2 ** attempt)
+            retry_after = e.response.headers.get("retry-after")
+            if retry_after:
+                try:
+                    delay = max(delay, float(retry_after))
+                except ValueError:
+                    pass
+            print(f"[AGENT] retryable {status} from provider, attempt {attempt + 1}/{_MAX_ATTEMPTS}, sleeping {delay:.1f}s", flush=True)
+            last_exc = e
+            await _asyncio.sleep(delay)
+        except (httpx.TimeoutException, httpx.TransportError) as e:
+            if attempt == _MAX_ATTEMPTS - 1:
+                raise
+            delay = _RETRY_BASE_DELAY * (2 ** attempt)
+            print(f"[AGENT] network error ({type(e).__name__}), attempt {attempt + 1}/{_MAX_ATTEMPTS}, sleeping {delay:.1f}s", flush=True)
+            last_exc = e
+            await _asyncio.sleep(delay)
+
+    raise last_exc  # unreachable; satisfies type checkers
 
 
 async def _anthropic_agent_complete(messages, tools, model, api_key, base_url, thinking_budget) -> AgentResponse:

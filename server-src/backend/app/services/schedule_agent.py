@@ -1194,8 +1194,13 @@ async def _execute_schedule_tool(
     elif tc.name == "get_memory_insights":
         limit = int(tc.arguments.get("limit") or 10)
         importance = tc.arguments.get("importance", "all")
+        if importance not in ("all", "high", "medium", "low"):
+            importance = "all"
+        params: list = [limit]
+        if importance != "all":
+            params.insert(0, importance)
+        where = "" if importance == "all" else "AND importance=?"
         async with aiosqlite.connect(db_path) as db:
-            where = "" if importance == "all" else f"AND importance='{importance}'"
             rows = await (await db.execute(f"""
                 SELECT title, summary, action_hint, importance, category,
                        content_time, expires_at, source_type
@@ -1206,7 +1211,7 @@ async def _execute_schedule_tool(
                 ORDER BY CASE importance WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
                          COALESCE(content_time, updated_at, sent_at) DESC
                 LIMIT ?
-            """, (limit,))).fetchall()
+            """, params)).fetchall()
         entries = [dict(zip(["title","summary","action_hint","importance","category","content_time","expires_at","source_type"], r)) for r in rows]
         if not entries:
             return json.dumps({"ok": True, "count": 0, "message": "暂无未过期的 Memory 条目。"})
