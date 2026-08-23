@@ -97,8 +97,6 @@ async def _get_stored_hash(db_path: str) -> str:
 @pytest.mark.asyncio
 async def test_b3_failure_does_not_advance_cursor(db_path, mock_llm, monkeypatch):
     """reconcile 失败 → 游标不动,下一轮还能拿到这批消息。"""
-    from datetime import datetime as dt
-
     await _insert_msgs(db_path, [
         _msg(301, "考试安排有变化,具体看通知", BASE_TS),
     ])
@@ -108,22 +106,79 @@ async def test_b3_failure_does_not_advance_cursor(db_path, mock_llm, monkeypatch
 
     monkeypatch.setattr(mp, "reconcile_message", failing_reconcile)
     r1 = await mp.run_dingtalk_memory_sync(db_path, {"id": "mock"}, "m", "k", now=NOW)
-    ts_after_fail = await mp._get_last_synced_ts(db_path)
-    assert ts_after_fail == 0  # cursor untouched
+    assert (await mp._get_last_synced_ts(db_path)) == 0  # cursor untouched
 
-    # recover on next run
-    monkeypatch.setattr(mp, "reconcile_message", None) if False else None
-
-    import unittest.mock as um
-    with um.patch.object(mp, "reconcile_message", side_effect=None):
-        pass
-    # restore real function via fresh import object
-    import importlib
-    import app.services.reconciler as rec_mod
-    real = rec_mod.reconcile_message
-    monkeypatch.setattr(mp, "reconcile_message", real)
+    # recover on next run — restore the real reconciler
+    from app.services.reconciler import reconcile_message as real_reconcile
+    monkeypatch.setattr(mp, "reconcile_message", real_reconcile)
     mock_llm.responses = [json.dumps({"ops": [], "need_more": False})]
     r2 = await mp.run_dingtalk_memory_sync(db_path, {"id": "mock"}, "m", "k",
                                            now=NOW + timedelta(minutes=1))
     assert r2["processed"] >= 1
     assert (await mp._get_last_synced_ts(db_path)) > 0
+
+
+@pytest.mark.asyncio
+async def test_b4_partial_success_advances_only_past_succeeded_groups(
+        db_path, mock_llm, monkeypatch):
+    """组A成功+组B失败+组C未执行 → 游标只越过A,B/C下轮重试(不丢消息)。"""
+    other = "另一个群"
+    await _insert_msgs(db_path, [
+        _msg(401, "第一组的消息,会成功", BASE_TS),
+        _msg(501, "第二组第一条,会失败", BASE_TS + 30 * 60_000, conv=other),
+        _msg(502, "第二组第二条", BASE_TS + 30 * 60_000 + 1000, conv=other),
+        _msg(601, "第三组消息", BASE_TS + 60 * 60_000),
+    ])
+
+    calls = {"n": 0}
+
+    async def flaky_reconcile(msg, *a, **k):
+        calls["n"] += 1
+        # Group B's primary is its newest message (502) — fail on that.
+        if "第二组第二条" in (msg.get("text") or ""):
+            return ReconcileResult(ok=False, errors=["simulated"])
+        return ReconcileResult(ok=True)
+
+    monkeypatch.setattr(mp, "reconcile_message", flaky_reconcile)
+    result = await mp.run_dingtalk_memory_sync(db_path, {"id": "mock"}, "m", "k", now=NOW)
+
+    cursor = await mp._get_last_synced_ts(db_path)
+    # Cursor must sit exactly at the end of group A — NOT past failed group B.
+    assert cursor == BASE_TS, f"cursor={cursor}, expected {BASE_TS}"
+    assert result["processed"] == 1
+
+    # Retry: only groups B and C remain.
+    seen = []
+    async with aiosqlite.connect(db_path) as db:
+        rows = await (await db.execute(
+            "SELECT mid FROM dingtalk_messages WHERE verdict IN ('notify','interest') "
+            "AND created_at > ? AND text != '' ORDER BY created_at",
+            (cursor,))).fetchall()
+        seen = [r[0] for r in rows]
+    assert set(seen) == {501, 502, 601}
+
+
+@pytest.mark.asyncio
+async def test_b5_primary_prefers_notify_over_interest(db_path, mock_llm):
+    """组内最新一条是 interest、前面有 notify → primary 必须选 notify。"""
+    await _insert_msgs(db_path, [
+        _msg(701, "周五交实验报告的通知", BASE_TS, verdict="notify"),
+        _msg(702, "顺便问下有人一起去吗", BASE_TS + 1000, verdict="interest"),
+    ])
+
+    captured = {}
+
+    async def capture_reconcile(msg, db_path_, provider, model, api_key, now,
+                                sibling_messages=None):
+        captured["primary_text"] = msg.get("text")
+        captured["sibling_texts"] = [s.get("text") for s in (sibling_messages or [])]
+        return ReconcileResult(ok=True)
+
+    from app.services.reconciler import reconcile_message as real
+    import unittest.mock as um
+    with um.patch.object(mp, "reconcile_message", capture_reconcile):
+        result = await mp.run_dingtalk_memory_sync(
+            db_path, {"id": "mock"}, "m", "k", now=NOW)
+
+    assert captured["primary_text"].startswith("周五交实验报告")
+    assert captured["sibling_texts"] == ["顺便问下有人一起去吗"]

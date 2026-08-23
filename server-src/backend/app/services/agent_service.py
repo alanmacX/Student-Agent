@@ -282,7 +282,10 @@ async def _openai_agent_complete(
         _chat_completion_url(base_url),
         headers,
         body,
+        # DeepSeek keeps its fast inner retry; every other provider relies on
+        # the outer agent_complete loop (avoids 3x3=9 stacked attempts).
         retry_deepseek=is_deepseek,
+        attempts=1 if not is_deepseek else 3,
     )
     print(f"[AGENT] LLM response status={resp.status_code}", flush=True)
     if resp.status_code == 401 and is_mimo and api_key:
